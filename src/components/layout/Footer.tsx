@@ -36,19 +36,20 @@ export default function Footer() {
               Stay connected across Africa with instant eSIM and physical SIM cards.
               No roaming fees, just seamless travel connectivity.
             </p>
-
+            <span className="text-xs text-white/40">Powered by</span>
             {/* Powered by Onnela */}
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-white/30">Powered by</span>
+            <div className="flex items-start justify-start " style={{ marginLeft: '-10px' }}>
               <Image
                 src="/logos/onnela_logo.png"
                 alt="Onnela"
-                width={72}
-                height={24}
-                className="h-5 w-auto object-contain opacity-60 hover:opacity-90 transition-opacity"
+                width={140}
+                height={48}
+                className="h-30 w-auto object-contain opacity-100 transition-opacity"
+                style={{ marginLeft: '0' }} // ensure no auto left margin is applied
               />
             </div>
           </div>
+    
 
           {/* Product */}
           <div>
