@@ -34,7 +34,7 @@ export default function Footer() {
 
             <p className="text-sm text-white/60 leading-relaxed max-w-xs mb-5">
               Stay connected across Africa with instant eSIM and physical SIM cards.
-              No roaming fees — just seamless travel connectivity.
+              No roaming fees, just seamless travel connectivity.
             </p>
 
             {/* Powered by Onnela */}

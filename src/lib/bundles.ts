@@ -55,10 +55,10 @@ export function formatMb(mb?: number) {
   return mb >= 1024 ? `${(mb / 1024).toFixed(0)} GB` : `${mb} MB`;
 }
 
-/** Consistent "Internet - 30 days - 25 MB" style label, regardless of how the raw API `name` is formatted. */
+/** Consistent "Internet, 30 days, 25 MB" style label, regardless of how the raw API `name` is formatted. */
 export function buildBundleTagline(validityDays?: number | null, mb?: number): string {
   const days = validityDays ?? 30;
-  return `Internet - ${days} days - ${formatMb(mb)}`;
+  return `Internet, ${days} days, ${formatMb(mb)}`;
 }
 
 /**

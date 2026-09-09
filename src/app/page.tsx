@@ -70,7 +70,7 @@ const howItWorks = [
     icon: <Zap size={28} />,
     num: '2',
     title: 'Quick Activation',
-    desc: 'Choose your eSIM activation date — we schedule it so you are connected when you need it.',
+    desc: 'Choose your eSIM activation date. We schedule it so you are connected when you need it.',
   },
   {
     icon: <Shield size={28} />,
@@ -159,7 +159,7 @@ export default function LandingPage() {
             </h1>
 
             <p className="text-lg text-white/80 mb-10 max-w-lg">
-              No roaming shock — 30-day plans with activation on the date you choose.
+              No roaming shock. 30-day plans with activation on the date you choose.
             </p>
 
             <div className="flex flex-col sm:flex-row gap-3">
@@ -221,7 +221,7 @@ export default function LandingPage() {
                       <p className="text-xs font-semibold text-slate-600 mb-1">{plan.tagline}</p>
                     )}
                     <p className="text-sm text-slate-500 mb-3">
-                      {plan.validity_days ?? 30} days · {plan.currency ?? 'USD'}{' '}
+                      {plan.validity_days ?? 30} days, {plan.currency ?? 'USD'}{' '}
                       {Number(plan.price ?? 0).toFixed(2)}
                     </p>
                     <Link
@@ -299,7 +299,7 @@ export default function LandingPage() {
                 className="inline-flex items-center rounded-full px-3 py-1 text-xs font-bold tracking-wide uppercase mb-5"
                 style={{ backgroundColor: 'rgba(23,207,84,0.18)', color: '#17cf54' }}
               >
-                Tanzania · eSIM &amp; SIM
+                Tanzania eSIM &amp; SIM
               </p>
               <h2 className="text-3xl sm:text-4xl font-extrabold mb-4">
                 Ready to travel{' '}
