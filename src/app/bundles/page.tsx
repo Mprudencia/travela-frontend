@@ -251,9 +251,8 @@ function BundlesContent() {
           </div>
         </div>
 
-        {/* Bundles — only after SIM type is chosen */}
-        {simType && (
-          loading ? (
+        {/* Bundles */}
+        {loading ? (
             <div className="flex items-center justify-center py-20">
               <Loader2 size={28} className="animate-spin text-slate-400" />
             </div>
@@ -360,8 +359,7 @@ function BundlesContent() {
                 );
               })}
             </div>
-          )
-        )}
+          )}
 
         {/* Bottom padding for sticky bar */}
         <div className="h-24" />
