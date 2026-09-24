@@ -18,15 +18,18 @@ import { useBalancePoll } from '@/hooks/useBalancePoll';
 import {
   CheckCircle,
   Clock,
+  Download,
   Globe,
   Info,
   Loader2,
   MapPin,
   Package,
+  Receipt,
   Smartphone,
   Wifi,
   X,
 } from 'lucide-react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
@@ -603,6 +606,8 @@ export default function DashboardPage() {
   const [topUpModalClosing, setTopUpModalClosing] = useState(false);
   const [topUpBundles, setTopUpBundles] = useState<TopUpBundle[]>([]);
   const [topUpBundlesLoading, setTopUpBundlesLoading] = useState(false);
+  const [showReceiptPrompt, setShowReceiptPrompt] = useState(false);
+  const [receiptOrderId, setReceiptOrderId] = useState<string | null>(null);
   const ordersRef = useRef(orders);
   const purchaseRef = useRef(purchase);
 
@@ -813,7 +818,30 @@ export default function DashboardPage() {
       }
     }
     setPendingPayment(readPendingPaymentFromStorage());
+    try {
+      if (sessionStorage.getItem('travela:showReceiptPrompt') === '1') {
+        setShowReceiptPrompt(true);
+        setReceiptOrderId(sessionStorage.getItem('travela:receiptOrderId'));
+      }
+    } catch {
+      /* ignore */
+    }
   }, [isAuthenticated]);
+
+  useEffect(() => {
+    if (!showReceiptPrompt || !pendingPayment?.order_id) return;
+    if (!receiptOrderId) setReceiptOrderId(String(pendingPayment.order_id));
+  }, [showReceiptPrompt, pendingPayment, receiptOrderId]);
+
+  const dismissReceiptPrompt = () => {
+    setShowReceiptPrompt(false);
+    try {
+      sessionStorage.removeItem('travela:showReceiptPrompt');
+      sessionStorage.removeItem('travela:receiptOrderId');
+    } catch {
+      /* ignore */
+    }
+  };
 
   useEffect(() => {
     if (!isAuthenticated) return;
@@ -1030,6 +1058,31 @@ export default function DashboardPage() {
   const isPhysicalSimAwaitingPickup =
     !hasActiveEsim && physicalPickupDetails != null;
 
+  const matchedReceiptOrder =
+    orders.find((o) => receiptOrderId && String(o.id) === String(receiptOrderId)) ??
+    orders.find(
+      (o) =>
+        pendingPayment?.order_id != null && String(o.id) === String(pendingPayment.order_id)
+    ) ??
+    null;
+  const receiptOrderPaid = matchedReceiptOrder ? isPaidOrder(matchedReceiptOrder) : false;
+  const receiptBundleName =
+    matchedReceiptOrder?.order_items?.[0]?.bundle_name ??
+    pendingPayment?.items?.[0]?.bundle?.name ??
+    purchase?.items?.[0]?.bundle?.name ??
+    'your plan';
+  const receiptAmount =
+    matchedReceiptOrder?.total_amount != null
+      ? Number(matchedReceiptOrder.total_amount)
+      : pendingPayment?.total ?? purchase?.total ?? null;
+  const receiptCurrency =
+    matchedReceiptOrder?.currency ?? pendingPayment?.currency ?? purchase?.currency ?? 'USD';
+  const receiptHref = matchedReceiptOrder
+    ? `/receipts?orderId=${matchedReceiptOrder.id}`
+    : receiptOrderId
+      ? `/receipts?orderId=${receiptOrderId}`
+      : '/receipts';
+
   const totalEsims =
     userEsims.length > 0
       ? userEsims.length
@@ -1204,6 +1257,71 @@ export default function DashboardPage() {
         {esimsError && (
           <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
             {esimsError}
+          </div>
+        )}
+
+        {showReceiptPrompt && (
+          <div className="rounded-2xl border border-slate-200 bg-white overflow-hidden shadow-sm">
+            <div
+              className="px-5 py-4 flex items-start justify-between gap-3"
+              style={{ backgroundColor: 'rgba(23,207,84,0.1)' }}
+            >
+              <div className="flex items-start gap-3 min-w-0">
+                <div
+                  className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0"
+                  style={{ backgroundColor: '#112116', color: 'white' }}
+                >
+                  <Receipt size={18} />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-sm font-extrabold text-slate-900">
+                    {receiptOrderPaid ? 'Payment received' : 'After you finish payment'}
+                  </p>
+                  <p className="text-xs text-slate-600 mt-0.5 leading-relaxed">
+                    {receiptOrderPaid
+                      ? 'Download your Travela receipt with plan and payment details.'
+                      : 'Complete payment in the other tab, then come back here. You can download your Travela receipt once payment is confirmed.'}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={dismissReceiptPrompt}
+                className="p-1.5 rounded-full text-slate-400 hover:bg-white/70 hover:text-slate-700 flex-shrink-0"
+                aria-label="Dismiss"
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <div className="px-5 py-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+              <div className="min-w-0">
+                <p className="text-xs font-bold uppercase tracking-wide text-slate-400">Purchase</p>
+                <p className="text-sm font-extrabold text-slate-900 truncate">{receiptBundleName}</p>
+                {receiptAmount != null && (
+                  <p className="text-sm font-bold mt-0.5" style={{ color: '#112116' }}>
+                    {receiptCurrency} {Number(receiptAmount).toFixed(2)}
+                  </p>
+                )}
+              </div>
+              <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
+                <Link
+                  href={receiptHref}
+                  onClick={dismissReceiptPrompt}
+                  className="inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl text-sm font-bold text-white hover:opacity-90"
+                  style={{ backgroundColor: '#112116' }}
+                >
+                  <Download size={16} />
+                  {receiptOrderPaid ? 'Download receipt' : 'View receipts'}
+                </Link>
+                <button
+                  type="button"
+                  onClick={() => void loadOrders()}
+                  className="inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl text-sm font-bold border border-slate-200 text-slate-700 hover:bg-slate-50"
+                >
+                  Refresh status
+                </button>
+              </div>
+            </div>
           </div>
         )}
 

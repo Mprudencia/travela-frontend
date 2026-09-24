@@ -5,7 +5,8 @@ import { OrderApi } from '@/lib/api';
 import { ArrowRight, Loader2, Printer, Receipt, RefreshCw, X } from 'lucide-react';
 import Image from 'next/image';
 import Link from 'next/link';
-import { useCallback, useEffect, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
+import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
 
 interface OrderItemBundle {
   name?: string;
@@ -291,7 +292,7 @@ function ReceiptModal({ order, onClose }: { order: OrderRecord; onClose: () => v
           style={{ backgroundColor: '#112116' }}
         >
           <Printer size={16} />
-          Print / Save as PDF
+          Download / Save as PDF
         </button>
       </div>
 
@@ -318,11 +319,31 @@ function ReceiptModal({ order, onClose }: { order: OrderRecord; onClose: () => v
 }
 
 export default function ReceiptsPage() {
+  return (
+    <Suspense
+      fallback={
+        <div
+          className="min-h-screen flex items-center justify-center"
+          style={{ backgroundColor: '#f6f8f6' }}
+        >
+          <Loader2 size={28} className="animate-spin text-slate-400" />
+        </div>
+      }
+    >
+      <ReceiptsContent />
+    </Suspense>
+  );
+}
+
+function ReceiptsContent() {
   const { isAuthenticated, isLoading: authLoading } = useAuth();
+  const searchParams = useSearchParams();
+  const orderIdParam = searchParams.get('orderId');
   const [orders, setOrders] = useState<OrderRecord[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [selectedOrder, setSelectedOrder] = useState<OrderRecord | null>(null);
+  const autoOpenedOrderId = useRef<string | null>(null);
 
   const loadOrders = useCallback(async () => {
     setLoading(true);
@@ -360,6 +381,19 @@ export default function ReceiptsPage() {
     }
     void loadOrders();
   }, [isAuthenticated, authLoading, loadOrders]);
+
+  // Deep-link from dashboard: open the matching paid receipt once (don't reopen after close)
+  useEffect(() => {
+    if (!orderIdParam || orders.length === 0) return;
+    if (autoOpenedOrderId.current === orderIdParam) return;
+    const match = orders.find((o) => String(o.id) === String(orderIdParam));
+    if (!match) return;
+    const status = (match.payment_status || match.status || '').toLowerCase();
+    if (status === 'paid' || status === 'completed') {
+      autoOpenedOrderId.current = orderIdParam;
+      setSelectedOrder(match);
+    }
+  }, [orderIdParam, orders]);
 
   if (authLoading) {
     return (

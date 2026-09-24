@@ -14,6 +14,7 @@ import {
   Mail,
   Smartphone,
   Wifi,
+  X,
 } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -69,6 +70,52 @@ const KYC_PLACEHOLDER = {
   gender: 'Other' as const,
   reason_for_travel: 'Tourism' as const,
 };
+
+const NATIONALITIES = [
+  'Tanzanian',
+  'Kenyan',
+  'Ugandan',
+  'Rwandan',
+  'Burundian',
+  'Congolese',
+  'South African',
+  'Nigerian',
+  'Ghanaian',
+  'Ethiopian',
+  'Egyptian',
+  'Moroccan',
+  'American',
+  'British',
+  'Canadian',
+  'Australian',
+  'German',
+  'French',
+  'Italian',
+  'Spanish',
+  'Dutch',
+  'Belgian',
+  'Swiss',
+  'Swedish',
+  'Norwegian',
+  'Danish',
+  'Finnish',
+  'Irish',
+  'Portuguese',
+  'Polish',
+  'Russian',
+  'Turkish',
+  'Indian',
+  'Chinese',
+  'Japanese',
+  'Korean',
+  'Emirati',
+  'Saudi',
+  'Israeli',
+  'Brazilian',
+  'Mexican',
+  'Argentine',
+  'Other',
+] as const;
 
 type Step = 'register' | 'otp' | 'payment' | 'success';
 
@@ -140,6 +187,7 @@ export default function CheckoutPage() {
   // Registration
   const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
+  const [nationality, setNationality] = useState('');
   const [password, setPassword] = useState('');
   const [passwordConfirm, setPasswordConfirm] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -161,6 +209,7 @@ export default function CheckoutPage() {
 
   // Payment
   const [paying, setPaying] = useState(false);
+  const [showPaymentRedirectDialog, setShowPaymentRedirectDialog] = useState(false);
   const [registeredUserId, setRegisteredUserId] = useState<number | null>(null);
   const [orderDraftId, setOrderDraftId] = useState<string>(() => `DRAFT-${new Date().getFullYear()}-${Date.now()}`);
   const [orderStoredSummary, setOrderStoredSummary] = useState<{
@@ -343,6 +392,10 @@ export default function CheckoutPage() {
     }
     if (!trimmedName) {
       setRegisterError('Please enter your full name.');
+      return;
+    }
+    if (!nationality.trim()) {
+      setRegisterError('Please select your nationality.');
       return;
     }
     if (!trimmedEmail || !emailOk) {
@@ -645,7 +698,7 @@ export default function CheckoutPage() {
         passport_id: KYC_PLACEHOLDER.passport_id,
         // API max 10 chars — use destination ISO code (e.g. TZ), not a sentence
         passport_country: (cart.country || 'TZ').slice(0, 10),
-        nationality: KYC_PLACEHOLDER.nationality,
+        nationality: nationality.trim() || KYC_PLACEHOLDER.nationality,
         gender: KYC_PLACEHOLDER.gender,
         reason_for_travel: KYC_PLACEHOLDER.reason_for_travel,
       },
@@ -718,6 +771,14 @@ export default function CheckoutPage() {
       }
 
       openPaymentInNewTab(targetUrl, paymentTab);
+      try {
+        sessionStorage.setItem('travela:showReceiptPrompt', '1');
+        if (orderId != null) {
+          sessionStorage.setItem('travela:receiptOrderId', String(orderId));
+        }
+      } catch {
+        /* ignore */
+      }
       router.push('/dashboard');
     } catch (e: unknown) {
       if (paymentTab && !paymentTab.closed) paymentTab.close();
@@ -726,6 +787,7 @@ export default function CheckoutPage() {
       alert(fallback || 'Could not continue to payment.');
     } finally {
       setPaying(false);
+      setShowPaymentRedirectDialog(false);
     }
   };
 
@@ -985,6 +1047,26 @@ export default function CheckoutPage() {
 
               <div>
                 <label className="text-xs font-bold text-slate-500 uppercase tracking-wide mb-1.5 block">
+                  Nationality <span className="text-red-400">*</span>
+                </label>
+                <select
+                  value={nationality}
+                  onChange={(e) => setNationality(e.target.value)}
+                  className="w-full px-4 py-3 rounded-xl border border-slate-200 text-sm text-slate-800 bg-white focus:outline-none focus:border-slate-400"
+                >
+                  <option value="" disabled>
+                    Select your nationality
+                  </option>
+                  {NATIONALITIES.map((n) => (
+                    <option key={n} value={n}>
+                      {n}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-slate-500 uppercase tracking-wide mb-1.5 block">
                   Email Address <span className="text-red-400">*</span>
                 </label>
                 <div className="relative">
@@ -1074,8 +1156,8 @@ export default function CheckoutPage() {
               style={{ backgroundColor: '#112116' }}
             >
               {registerSubmitting
-                ? <><Loader2 size={18} className="animate-spin" /> Creating account…</>
-                : <>Create account &amp; continue <ArrowRight size={18} /></>}
+                ? <><Loader2 size={18} className="animate-spin" /> Creating…</>
+                : <>Continue <ArrowRight size={18} /></>}
             </button>
           </div>
         )}
@@ -1091,7 +1173,8 @@ export default function CheckoutPage() {
             </div>
             <h2 className="text-xl font-extrabold text-slate-900 mb-2">Verification code</h2>
             <p className="text-sm text-slate-500 mb-8 leading-relaxed">
-              Enter the 6-digit code we sent to <strong className="text-slate-700">{email || 'your email'}</strong>.
+              Enter the 6-digit code we sent to{' '}
+              <span className="font-semibold text-slate-700">{email || 'your email'}</span>
             </p>
 
             <div className="bg-white rounded-2xl border border-slate-200 p-6 mb-4 text-left">
@@ -1216,7 +1299,7 @@ export default function CheckoutPage() {
 
             <button
               type="button"
-              onClick={() => void handleContinueToPaymentClick()}
+              onClick={() => setShowPaymentRedirectDialog(true)}
               disabled={paying}
               className="w-full flex items-center justify-center gap-2 py-4 rounded-xl text-base font-bold text-white disabled:opacity-60 hover:opacity-90 transition-opacity"
               style={{ backgroundColor: '#112116' }}
@@ -1228,6 +1311,128 @@ export default function CheckoutPage() {
           </div>
         )}
       </div>
+
+      {/* Payment redirect confirmation */}
+      {showPaymentRedirectDialog && (
+        <div
+          className="fixed inset-0 z-[100] flex items-end sm:items-center justify-center p-0 sm:p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="payment-redirect-title"
+        >
+          <button
+            type="button"
+            className="absolute inset-0 bg-black/55"
+            aria-label="Close"
+            disabled={paying}
+            onClick={() => {
+              if (!paying) setShowPaymentRedirectDialog(false);
+            }}
+          />
+          <div className="relative w-full sm:max-w-md bg-white rounded-t-3xl sm:rounded-3xl shadow-2xl overflow-hidden">
+            <div className="px-5 pt-5 pb-6 sm:p-7">
+              <div className="flex items-start justify-between gap-3 mb-4">
+                <div
+                  className="w-12 h-12 rounded-2xl flex items-center justify-center flex-shrink-0"
+                  style={{ backgroundColor: 'rgba(17,33,22,0.08)', color: '#112116' }}
+                >
+                  <CreditCard size={24} />
+                </div>
+                <button
+                  type="button"
+                  disabled={paying}
+                  onClick={() => setShowPaymentRedirectDialog(false)}
+                  className="p-2 -mr-1 -mt-1 rounded-full text-slate-400 hover:bg-slate-100 hover:text-slate-700 disabled:opacity-50"
+                  aria-label="Close dialog"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+
+              <h2 id="payment-redirect-title" className="text-xl font-extrabold text-slate-900 mb-2">
+                You&apos;ll leave Travela briefly
+              </h2>
+              <p className="text-sm text-slate-500 leading-relaxed mb-5">
+                Next, we open a secure payment page in another tab. Complete payment there, then come
+                back here to Travela. Your order and receipt stay on this site.
+              </p>
+
+              <ol className="space-y-3 text-sm text-slate-700 mb-6">
+                <li className="flex gap-3">
+                  <span
+                    className="w-6 h-6 rounded-full flex-shrink-0 flex items-center justify-center text-xs font-bold text-white"
+                    style={{ backgroundColor: '#112116' }}
+                  >
+                    1
+                  </span>
+                  <span>Payment opens in a new tab on our payment partner.</span>
+                </li>
+                <li className="flex gap-3">
+                  <span
+                    className="w-6 h-6 rounded-full flex-shrink-0 flex items-center justify-center text-xs font-bold text-white"
+                    style={{ backgroundColor: '#112116' }}
+                  >
+                    2
+                  </span>
+                  <span>Pay the amount due, then close that tab when finished.</span>
+                </li>
+                <li className="flex gap-3">
+                  <span
+                    className="w-6 h-6 rounded-full flex-shrink-0 flex items-center justify-center text-xs font-bold text-white"
+                    style={{ backgroundColor: '#112116' }}
+                  >
+                    3
+                  </span>
+                  <span>
+                    Return to Travela. You can download your purchase receipt from your dashboard.
+                  </span>
+                </li>
+              </ol>
+
+              <div
+                className="rounded-xl border border-slate-200 px-4 py-3 mb-5 flex items-center justify-between gap-3"
+                style={{ backgroundColor: '#f6f8f6' }}
+              >
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-wide text-slate-400">Paying</p>
+                  <p className="text-sm font-extrabold text-slate-900">
+                    {formatMb(cart.bundle.data_mb)} ({cart.bundle.name})
+                  </p>
+                </div>
+                <p className="text-base font-extrabold flex-shrink-0" style={{ color: '#112116' }}>
+                  {currency} {total.toFixed(2)}
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => void handleContinueToPaymentClick()}
+                disabled={paying}
+                className="w-full flex items-center justify-center gap-2 py-4 rounded-xl text-base font-bold text-white disabled:opacity-60 hover:opacity-90 transition-opacity"
+                style={{ backgroundColor: '#112116' }}
+              >
+                {paying ? (
+                  <>
+                    <Loader2 size={18} className="animate-spin" /> Opening payment…
+                  </>
+                ) : (
+                  <>
+                    Open payment page <ArrowRight size={18} />
+                  </>
+                )}
+              </button>
+              <button
+                type="button"
+                disabled={paying}
+                onClick={() => setShowPaymentRedirectDialog(false)}
+                className="w-full mt-2 py-3 text-sm font-semibold text-slate-500 hover:text-slate-800 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
