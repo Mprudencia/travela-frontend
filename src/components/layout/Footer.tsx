@@ -4,9 +4,14 @@ import { useAuth } from '@/lib/auth-context';
 import { Mail } from 'lucide-react';
 import Image from 'next/image';
 import Link from 'next/link';
+import { usePathname } from 'next/navigation';
 
 export default function Footer() {
   const { isAuthenticated, isLoading } = useAuth();
+  const pathname = usePathname();
+
+  // Immersive auth screens use a full-page split layout
+  if (pathname === '/auth/login') return null;
 
   const accountLinks = [
     ...(!isLoading && !isAuthenticated

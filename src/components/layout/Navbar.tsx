@@ -38,6 +38,9 @@ export default function Navbar() {
   // On the home page the navbar floats over the hero image
   const isHome = pathname === '/';
 
+  // Immersive auth screens use a full-page split layout
+  if (pathname === '/auth/login') return null;
+
   const handleLogout = () => {
     logout();
     router.push('/');
@@ -64,9 +67,9 @@ export default function Navbar() {
             <Image
               src={isHome ? '/logos/travela_white.png' : '/logos/travela_dark.png'}
               alt="Travela"
-              width={110}
-              height={36}
-              className="h-8 w-auto object-contain"
+              width={isHome ? 160 : 110}
+              height={isHome ? 52 : 36}
+              className={`w-auto object-contain ${isHome ? 'h-11 sm:h-12' : 'h-8'}`}
               priority
             />
           </Link>
