@@ -1,7 +1,7 @@
 'use client';
 
 import { useAuth } from '@/lib/auth-context';
-import { ArrowRight, Loader2, Wifi, Zap, Shield } from 'lucide-react';
+import { ArrowRight, Loader2, Wifi, Zap, Shield, Smartphone, X } from 'lucide-react';
 import Image from 'next/image';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -22,6 +22,8 @@ const typingPhrases = [
   'Tanzania.',
   'wherever you roam.',
 ];
+
+const BUNDLES_HREF = '/bundles?country=TZ&countryName=Tanzania';
 
 function useTypewriter(phrases: string[], typingSpeed = 80, erasingSpeed = 45, pauseMs = 1800) {
   const [displayed, setDisplayed] = useState('');
@@ -86,6 +88,7 @@ export default function LandingPage() {
   const { isAuthenticated, isLoading } = useAuth();
   const [popularPlans, setPopularPlans] = useState<Bundle[]>([]);
   const [plansLoading, setPlansLoading] = useState(true);
+  const [showCompatDialog, setShowCompatDialog] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -118,12 +121,23 @@ export default function LandingPage() {
     }
   }, [isAuthenticated, isLoading, router]);
 
+  useEffect(() => {
+    if (!showCompatDialog) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setShowCompatDialog(false);
+    };
+    window.addEventListener('keydown', onKey);
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      document.body.style.overflow = prev;
+    };
+  }, [showCompatDialog]);
+
   if (isLoading || isAuthenticated) {
     return null;
   }
-
-  const ctaHref = '/bundles?country=TZ&countryName=Tanzania';
-  const ctaLabel = 'Get Started';
 
   return (
     <div>
@@ -163,13 +177,14 @@ export default function LandingPage() {
             </p>
 
             <div className="flex flex-col sm:flex-row gap-3">
-              <Link
-                href={ctaHref}
+              <button
+                type="button"
+                onClick={() => setShowCompatDialog(true)}
                 className="inline-flex items-center justify-center gap-2 px-8 py-4 rounded-xl text-base font-bold transition-opacity hover:opacity-90"
                 style={{ backgroundColor: '#112116', color: 'white' }}
               >
-                {ctaLabel} <ArrowRight size={18} />
-              </Link>
+                Get Started <ArrowRight size={18} />
+              </button>
               <a
                 href="#how-it-works"
                 className="inline-flex items-center justify-center gap-2 px-8 py-4 rounded-xl text-base font-bold text-white border border-white/40 hover:bg-white/10 transition-colors"
@@ -308,17 +323,129 @@ export default function LandingPage() {
               <p className="text-base text-white/80 mb-8">
                 Join thousands of travellers staying connected across Africa with Travela eSIMs and SIM cards.
               </p>
-              <Link
-                href="/bundles?country=TZ&countryName=Tanzania"
+              <button
+                type="button"
+                onClick={() => setShowCompatDialog(true)}
                 className="inline-flex items-center gap-2 px-8 py-4 rounded-xl text-base font-bold transition-opacity hover:opacity-90"
                 style={{ backgroundColor: '#17cf54', color: '#112116' }}
               >
                 Get your SIM now <ArrowRight size={18} />
-              </Link>
+              </button>
             </div>
           </div>
         </div>
       </section>
+
+      {/* Phone compatibility onboarding dialog */}
+      {showCompatDialog && (
+        <div
+          className="fixed inset-0 z-[100] flex items-end sm:items-center justify-center p-0 sm:p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="compat-dialog-title"
+        >
+          <button
+            type="button"
+            className="absolute inset-0 bg-black/55"
+            aria-label="Close"
+            onClick={() => setShowCompatDialog(false)}
+          />
+          <div className="relative w-full sm:max-w-md bg-white rounded-t-3xl sm:rounded-3xl shadow-2xl overflow-hidden">
+            <div className="px-5 pt-5 pb-6 sm:p-7">
+              <div className="flex items-start justify-between gap-3 mb-4">
+                <div
+                  className="w-12 h-12 rounded-2xl flex items-center justify-center flex-shrink-0"
+                  style={{ backgroundColor: 'rgba(17,33,22,0.08)', color: '#112116' }}
+                >
+                  <Smartphone size={24} />
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowCompatDialog(false)}
+                  className="p-2 -mr-1 -mt-1 rounded-full text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                  aria-label="Close dialog"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+
+              <h2 id="compat-dialog-title" className="text-xl font-extrabold text-slate-900 mb-2">
+                Check your phone first
+              </h2>
+              <p className="text-sm text-slate-500 leading-relaxed mb-5">
+                An <span className="font-semibold text-slate-700">eSIM</span> is a digital SIM built into
+                your phone. No plastic card. Not every phone has one, so check before you continue.
+              </p>
+
+              <div
+                className="rounded-2xl border border-slate-200 p-4 mb-4"
+                style={{ backgroundColor: '#f6f8f6' }}
+              >
+                <p className="text-xs font-bold uppercase tracking-widest text-slate-400 mb-2">
+                  Quick check
+                </p>
+                <ol className="space-y-3 text-sm text-slate-700">
+                  <li className="flex gap-3">
+                    <span
+                      className="w-6 h-6 rounded-full flex-shrink-0 flex items-center justify-center text-xs font-bold text-white"
+                      style={{ backgroundColor: '#112116' }}
+                    >
+                      1
+                    </span>
+                    <span>
+                      Open your Phone app and dial{' '}
+                      <span className="font-extrabold tracking-wide">*#06#</span>
+                    </span>
+                  </li>
+                  <li className="flex gap-3">
+                    <span
+                      className="w-6 h-6 rounded-full flex-shrink-0 flex items-center justify-center text-xs font-bold text-white"
+                      style={{ backgroundColor: '#112116' }}
+                    >
+                      2
+                    </span>
+                    <span>
+                      If you see <span className="font-extrabold">EID</span>, your phone supports eSIM.
+                    </span>
+                  </li>
+                  <li className="flex gap-3">
+                    <span
+                      className="w-6 h-6 rounded-full flex-shrink-0 flex items-center justify-center text-xs font-bold text-white"
+                      style={{ backgroundColor: '#112116' }}
+                    >
+                      3
+                    </span>
+                    <span>
+                      No EID? Choose a <span className="font-extrabold">physical SIM</span> on the next
+                      page instead.
+                    </span>
+                  </li>
+                </ol>
+              </div>
+
+              <p className="text-xs text-slate-400 text-center mb-5">
+                You can pick eSIM or physical SIM after you proceed.
+              </p>
+
+              <button
+                type="button"
+                onClick={() => router.push(BUNDLES_HREF)}
+                className="w-full flex items-center justify-center gap-2 py-4 rounded-xl text-base font-bold text-white hover:opacity-90 transition-opacity"
+                style={{ backgroundColor: '#112116' }}
+              >
+                Proceed <ArrowRight size={18} />
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowCompatDialog(false)}
+                className="w-full mt-2 py-3 text-sm font-semibold text-slate-500 hover:text-slate-800"
+              >
+                Not now
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
