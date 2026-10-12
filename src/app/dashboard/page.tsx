@@ -1456,11 +1456,20 @@ export default function DashboardPage() {
       todayPart &&
       activationDay > todayPart
   );
+  const daysUntilActivation = isReservedFuture ? daysUntil(scheduledActivationIso) : null;
+  const activationCountdownLabel =
+    daysUntilActivation == null
+      ? null
+      : daysUntilActivation <= 0
+        ? 'today'
+        : daysUntilActivation === 1
+          ? 'tomorrow'
+          : `in ${daysUntilActivation} days`;
 
   const planLifecycleLabel = isPlanExpired
     ? 'Expired'
     : isReservedFuture
-      ? 'Reserved'
+      ? 'Scheduled'
       : !hasActiveEsim && hasPurchasedPlan
         ? 'Setting up'
         : isEsimType
@@ -1938,34 +1947,104 @@ export default function DashboardPage() {
                       <p className="text-xs font-bold uppercase tracking-widest text-slate-400 mb-1">
                         Your purchase
                       </p>
-                      <h2 className="text-lg font-extrabold text-slate-900">Number reserved</h2>
+                      <h2 className="text-lg font-extrabold text-slate-900">eSIM scheduled</h2>
                       <p className="text-sm text-slate-600 mt-2 leading-relaxed">
-                        Your plan activates on{' '}
+                        Your plan is set to activate on{' '}
                         <span className="font-extrabold text-slate-900">
                           {formatTripDate(scheduledActivationIso)}
                         </span>
-                        . Until that day, your Travela number stays reserved. You&apos;ll see the
-                        assigned number and activation steps here when the date arrives.
+                        {activationCountdownLabel ? (
+                          <>
+                            {' '}
+                            (
+                            <span className="font-semibold text-slate-800">
+                              {activationCountdownLabel}
+                            </span>
+                            )
+                          </>
+                        ) : null}
+                        . Your Travela number stays reserved until then — install steps unlock on
+                        that day.
                       </p>
                     </div>
                     <span
                       className="text-xs font-extrabold px-3 py-1.5 rounded-full flex-shrink-0"
                       style={{ backgroundColor: 'rgba(17,33,22,0.12)', color: '#112116' }}
                     >
-                      Reserved
+                      Scheduled
                     </span>
                   </div>
-                  <div className="px-5 py-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 border-t border-slate-100">
-                    <div className="min-w-0">
+
+                  <div className="px-5 py-4 border-t border-slate-100">
+                    <div className="min-w-0 mb-4">
                       <p className="text-xs font-bold uppercase tracking-wide text-slate-400">Plan</p>
                       <p className="text-sm font-extrabold text-slate-900 truncate">{esimTitle}</p>
                       <p className="text-xs text-slate-500 mt-1">
-                        {planValidityDays}-day plan · activates {formatTripDate(scheduledActivationIso)}
+                        {planValidityDays}-day plan · activates{' '}
+                        {formatTripDate(scheduledActivationIso)}
                       </p>
                     </div>
+
+                    <div
+                      className="rounded-xl px-4 py-4"
+                      style={{ backgroundColor: 'rgba(17,33,22,0.04)' }}
+                    >
+                      <p className="text-xs font-bold uppercase tracking-wide text-slate-500 mb-3 flex items-center gap-1.5">
+                        <Clock size={13} />
+                        What happens next
+                      </p>
+                      <ol className="space-y-3">
+                        <li className="flex gap-3 text-sm text-slate-700 leading-relaxed">
+                          <span
+                            className="flex-shrink-0 w-6 h-6 rounded-full text-[11px] font-extrabold flex items-center justify-center text-white"
+                            style={{ backgroundColor: '#112116' }}
+                          >
+                            1
+                          </span>
+                          <span>
+                            <span className="font-semibold text-slate-900">Until activation day</span>
+                            {' — '}
+                            nothing to install yet. Keep this account signed in and watch for our
+                            email with your QR code and setup steps.
+                          </span>
+                        </li>
+                        <li className="flex gap-3 text-sm text-slate-700 leading-relaxed">
+                          <span
+                            className="flex-shrink-0 w-6 h-6 rounded-full text-[11px] font-extrabold flex items-center justify-center text-white"
+                            style={{ backgroundColor: '#112116' }}
+                          >
+                            2
+                          </span>
+                          <span>
+                            <span className="font-semibold text-slate-900">
+                              On {formatTripDate(scheduledActivationIso)}
+                            </span>
+                            {' — '}
+                            open this dashboard. Your Travela number and install instructions
+                            (Activate eSIM / QR) will appear here so you can set up on your phone.
+                          </span>
+                        </li>
+                        <li className="flex gap-3 text-sm text-slate-700 leading-relaxed">
+                          <span
+                            className="flex-shrink-0 w-6 h-6 rounded-full text-[11px] font-extrabold flex items-center justify-center text-white"
+                            style={{ backgroundColor: '#112116' }}
+                          >
+                            3
+                          </span>
+                          <span>
+                            <span className="font-semibold text-slate-900">After install</span>
+                            {' — '}
+                            turn on the eSIM line and enable{' '}
+                            <span className="font-semibold">Data Roaming</span>. Your{' '}
+                            {planValidityDays}-day data plan starts from activation.
+                          </span>
+                        </li>
+                      </ol>
+                    </div>
+
                     <Link
                       href={receiptHref}
-                      className="inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl text-sm font-bold text-white hover:opacity-90"
+                      className="mt-4 w-full sm:w-auto inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl text-sm font-bold text-white hover:opacity-90"
                       style={{ backgroundColor: '#112116' }}
                     >
                       <Download size={16} />

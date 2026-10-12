@@ -58,8 +58,8 @@ function LoginContent() {
   };
 
   return (
-    <div className="min-h-screen flex bg-white">
-      {/* Left — brand image panel */}
+    <div className="min-h-dvh flex bg-white">
+      {/* Left — brand image panel (desktop) */}
       <div className="relative hidden lg:flex lg:w-1/2 overflow-hidden">
         <Image
           src="/backgrounds/7.jpg"
@@ -106,24 +106,45 @@ function LoginContent() {
         </div>
       </div>
 
-      {/* Right — form */}
+      {/* Right — form (desktop layout unchanged; mobile-only brand strip above) */}
       <div
-        className="w-full lg:w-1/2 flex flex-col justify-center px-5 sm:px-10 xl:px-16 py-10"
+        className="w-full lg:w-1/2 flex flex-col lg:justify-center min-h-dvh lg:min-h-screen px-5 sm:px-10 xl:px-16 py-0 lg:py-10"
         style={{ backgroundColor: '#f6f8f6' }}
       >
-        <div className="w-full max-w-md mx-auto">
-          <div className="lg:hidden mb-8">
-            <Link href="/" className="inline-flex">
+        {/* Mobile-only brand strip */}
+        <div className="lg:hidden relative h-40 sm:h-44 shrink-0 overflow-hidden -mx-5 sm:-mx-10 mb-0">
+          <Image
+            src="/backgrounds/7.jpg"
+            alt=""
+            fill
+            priority
+            className="object-cover object-center"
+            sizes="100vw"
+          />
+          <div
+            className="absolute inset-0"
+            style={{
+              background:
+                'linear-gradient(180deg, rgba(17,33,22,0.55) 0%, rgba(17,33,22,0.72) 100%)',
+            }}
+          />
+          <div className="relative z-10 h-full flex flex-col justify-between p-5">
+            <Link href="/" className="inline-flex self-start">
               <Image
-                src="/logos/travela_dark.png"
+                src="/logos/travela_white.png"
                 alt="Travela"
-                width={120}
-                height={36}
-                className="h-8 w-auto object-contain"
+                width={130}
+                height={40}
+                className="h-9 w-auto object-contain"
               />
             </Link>
+            <p className="text-sm font-semibold text-white/90 leading-snug max-w-[16rem]">
+              Manage your eSIM and stay connected in Tanzania.
+            </p>
           </div>
+        </div>
 
+        <div className="w-full max-w-md mx-auto flex-1 lg:flex-none flex flex-col px-0 py-7 lg:py-0">
           <h1 className="text-3xl sm:text-4xl font-extrabold text-slate-900 mb-1 tracking-tight">
             Welcome
           </h1>
@@ -149,7 +170,7 @@ function LoginContent() {
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   placeholder="you@example.com"
-                  className="w-full pl-11 pr-4 py-3.5 rounded-xl border border-slate-200 bg-white text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:border-slate-400 transition-colors"
+                  className="w-full pl-11 pr-4 py-3.5 rounded-xl border border-slate-200 bg-white text-base lg:text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:border-slate-400 transition-colors"
                 />
               </div>
             </div>
@@ -173,7 +194,7 @@ function LoginContent() {
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="••••••••"
-                  className="w-full pl-11 pr-11 py-3.5 rounded-xl border border-slate-200 bg-white text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:border-slate-400 transition-colors"
+                  className="w-full pl-11 pr-11 py-3.5 rounded-xl border border-slate-200 bg-white text-base lg:text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:border-slate-400 transition-colors"
                 />
                 <button
                   type="button"
@@ -234,7 +255,7 @@ function LoginContent() {
             </Link>
           </p>
 
-          <p className="text-center text-xs text-slate-400 mt-5 leading-relaxed">
+          <p className="mt-auto lg:mt-5 pt-8 lg:pt-0 text-center text-xs text-slate-400 leading-relaxed">
             By continuing you confirm you have read our{' '}
             <Link href="/terms" className="font-semibold hover:underline" style={{ color: '#112116' }}>
               Terms

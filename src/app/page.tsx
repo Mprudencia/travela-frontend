@@ -156,12 +156,12 @@ export default function LandingPage() {
           <div className="absolute inset-0 bg-gradient-to-r from-black/70 via-black/40 to-black/20" />
         </div>
 
-        <div className="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-32 pb-24">
+        <div className="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-24 sm:pt-32 pb-16 sm:pb-24">
           <div className="max-w-2xl">
-            <h1 className="text-3xl sm:text-4xl lg:text-5xl font-extrabold text-white leading-snug mb-4">
+            <h1 className="text-[1.7rem] leading-tight sm:text-4xl lg:text-5xl font-extrabold text-white sm:leading-snug mb-4">
               eSIM for Tanzania.
               <span className="block mt-1">Stay connected seamlessly</span>
-              <span className="block mt-1">
+              <span className="block mt-1 min-h-[1.15em]">
                 in{' '}
                 <span style={{ color: '#17cf54' }}>
                   {typedText}
@@ -173,22 +173,22 @@ export default function LandingPage() {
               </span>
             </h1>
 
-            <p className="text-lg text-white/80 mb-10 max-w-lg">
+            <p className="text-base sm:text-lg text-white/80 mb-8 sm:mb-10 max-w-lg">
               No roaming shock. 30-day plans with activation on the date you choose.
             </p>
 
-            <div className="flex flex-col sm:flex-row gap-3">
+            <div className="flex flex-col sm:flex-row gap-3 w-full sm:w-auto">
               <button
                 type="button"
                 onClick={() => setShowCompatDialog(true)}
-                className="inline-flex items-center justify-center gap-2 px-8 py-4 rounded-xl text-base font-bold transition-opacity hover:opacity-90"
+                className="inline-flex items-center justify-center gap-2 w-full sm:w-auto px-8 py-4 rounded-xl text-base font-bold transition-opacity hover:opacity-90"
                 style={{ backgroundColor: '#112116', color: 'white' }}
               >
                 Get Started <ArrowRight size={18} />
               </button>
               <a
                 href="#how-it-works"
-                className="inline-flex items-center justify-center gap-2 px-8 py-4 rounded-xl text-base font-bold text-white border border-white/40 hover:bg-white/10 transition-colors"
+                className="inline-flex items-center justify-center gap-2 w-full sm:w-auto px-8 py-4 rounded-xl text-base font-bold text-white border border-white/40 hover:bg-white/10 transition-colors"
               >
                 Learn More
               </a>

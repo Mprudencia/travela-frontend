@@ -13,7 +13,7 @@ import {
 import Image from 'next/image';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 const publicLinks = [
   { href: '/', label: 'Home' },
@@ -38,6 +38,20 @@ export default function Navbar() {
   // On the home page the navbar floats over the hero image
   const isHome = pathname === '/';
 
+  useEffect(() => {
+    if (!menuOpen) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [menuOpen]);
+
+  useEffect(() => {
+    setMenuOpen(false);
+    setUserMenuOpen(false);
+  }, [pathname]);
+
   // Immersive auth screens use a full-page split layout
   if (pathname === '/auth/login') return null;
 
@@ -61,9 +75,8 @@ export default function Navbar() {
     >
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex items-center justify-between h-16">
-
           {/* Logo — white on hero, dark elsewhere */}
-          <Link href="/" className="flex items-center flex-shrink-0">
+          <Link href="/" className="flex items-center flex-shrink-0" onClick={() => setMenuOpen(false)}>
             <Image
               src={isHome ? '/logos/travela_white.png' : '/logos/travela_dark.png'}
               alt="Travela"
@@ -79,7 +92,11 @@ export default function Navbar() {
             className="hidden md:flex items-center gap-1 px-2 py-1 rounded-full"
             style={
               isHome
-                ? { backgroundColor: 'rgba(255,255,255,0.15)', backdropFilter: 'blur(8px)', border: '1px solid rgba(255,255,255,0.2)' }
+                ? {
+                    backgroundColor: 'rgba(255,255,255,0.15)',
+                    backdropFilter: 'blur(8px)',
+                    border: '1px solid rgba(255,255,255,0.2)',
+                  }
                 : {}
             }
           >
@@ -95,8 +112,8 @@ export default function Navbar() {
                         ? 'bg-white/20 text-white'
                         : 'text-white/90 hover:text-white hover:bg-white/15'
                       : isActive
-                      ? 'text-slate-900 underline underline-offset-4'
-                      : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+                        ? 'text-slate-900 underline underline-offset-4'
+                        : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
                   }`}
                 >
                   {link.label}
@@ -194,13 +211,15 @@ export default function Navbar() {
 
             {/* Mobile toggle */}
             <button
-              className={`md:hidden w-9 h-9 flex items-center justify-center rounded-lg transition-colors ${
+              type="button"
+              className={`md:hidden w-10 h-10 flex items-center justify-center rounded-xl transition-colors ${
                 isHome
-                  ? 'text-white hover:bg-white/15'
-                  : 'text-slate-600 hover:bg-slate-50'
+                  ? 'text-white bg-white/15 border border-white/25 hover:bg-white/25'
+                  : 'text-slate-700 bg-slate-50 border border-slate-200 hover:bg-slate-100'
               }`}
               onClick={() => setMenuOpen(!menuOpen)}
-              aria-label="Toggle menu"
+              aria-label={menuOpen ? 'Close menu' : 'Open menu'}
+              aria-expanded={menuOpen}
             >
               {menuOpen ? <X size={20} /> : <Menu size={20} />}
             </button>
@@ -208,51 +227,98 @@ export default function Navbar() {
         </div>
       </div>
 
-      {/* Mobile menu */}
+      {/* Mobile full-screen drawer */}
       {menuOpen && (
-        <div
-          className="md:hidden px-4 py-3 space-y-1 border-t"
-          style={
-            isHome
-              ? { backgroundColor: 'rgba(17,33,22,0.92)', backdropFilter: 'blur(12px)', borderColor: 'rgba(255,255,255,0.1)' }
-              : { backgroundColor: 'white', borderColor: '#f1f5f9' }
-          }
-        >
-          {navLinks.map((link) => (
-            <Link
-              key={link.label}
-              href={link.href}
-              onClick={() => setMenuOpen(false)}
-              className={`block px-4 py-3 rounded-xl text-sm font-semibold transition-colors ${
-                isHome
-                  ? 'text-white/80 hover:text-white hover:bg-white/10'
-                  : 'text-slate-700 hover:bg-slate-50'
+        <div className="md:hidden fixed inset-0 z-[60]" role="dialog" aria-modal="true">
+          <button
+            type="button"
+            className="absolute inset-0 bg-black/55"
+            aria-label="Close menu"
+            onClick={() => setMenuOpen(false)}
+          />
+          <div
+            className="absolute inset-y-0 right-0 w-full max-w-sm flex flex-col shadow-2xl"
+            style={{ backgroundColor: isHome ? '#112116' : '#ffffff' }}
+          >
+            <div
+              className={`flex items-center justify-between h-16 px-4 border-b ${
+                isHome ? 'border-white/10' : 'border-slate-100'
               }`}
             >
-              {link.label}
-            </Link>
-          ))}
-          {!isLoading && !isAuthenticated && (
-            <>
-              <Link
-                href="/auth/login"
-                onClick={() => setMenuOpen(false)}
-                className={`block px-4 py-3 rounded-xl text-sm font-semibold ${
-                  isHome ? 'text-white/70 hover:text-white' : 'text-slate-700 hover:bg-slate-50'
-                }`}
-              >
-                Sign in
+              <Link href="/" onClick={() => setMenuOpen(false)} className="flex items-center">
+                <Image
+                  src={isHome ? '/logos/travela_white.png' : '/logos/travela_dark.png'}
+                  alt="Travela"
+                  width={130}
+                  height={40}
+                  className="h-9 w-auto object-contain"
+                />
               </Link>
-            </>
-          )}
-          {!isLoading && isAuthenticated && (
-            <button
-              onClick={handleLogout}
-              className="block w-full text-left px-4 py-3 rounded-xl text-sm font-semibold text-red-400 hover:bg-red-900/20"
+              <button
+                type="button"
+                onClick={() => setMenuOpen(false)}
+                className={`w-10 h-10 flex items-center justify-center rounded-xl ${
+                  isHome
+                    ? 'text-white bg-white/10 border border-white/20'
+                    : 'text-slate-700 bg-slate-50 border border-slate-200'
+                }`}
+                aria-label="Close menu"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <nav className="flex-1 overflow-y-auto px-4 py-5 space-y-1">
+              {navLinks.map((link) => (
+                <Link
+                  key={link.label}
+                  href={link.href}
+                  onClick={() => setMenuOpen(false)}
+                  className={`block px-4 py-3.5 rounded-xl text-base font-semibold transition-colors ${
+                    isHome
+                      ? 'text-white hover:bg-white/10'
+                      : 'text-slate-800 hover:bg-slate-50'
+                  }`}
+                >
+                  {link.label}
+                </Link>
+              ))}
+            </nav>
+
+            <div
+              className={`px-4 pt-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] border-t ${
+                isHome ? 'border-white/10' : 'border-slate-100'
+              }`}
             >
-              Sign out
-            </button>
-          )}
+              {!isLoading && !isAuthenticated && (
+                <Link
+                  href="/auth/login"
+                  onClick={() => setMenuOpen(false)}
+                  className={`flex w-full items-center justify-center px-4 py-3.5 rounded-xl text-sm font-bold ${
+                    isHome
+                      ? 'text-[#112116] bg-white hover:bg-white/90'
+                      : 'text-white'
+                  }`}
+                  style={!isHome ? { backgroundColor: '#112116' } : undefined}
+                >
+                  Sign in
+                </Link>
+              )}
+              {!isLoading && isAuthenticated && (
+                <button
+                  type="button"
+                  onClick={handleLogout}
+                  className={`flex w-full items-center justify-center gap-2 px-4 py-3.5 rounded-xl text-sm font-bold ${
+                    isHome
+                      ? 'text-red-300 bg-white/10 hover:bg-white/15'
+                      : 'text-red-600 bg-red-50 hover:bg-red-100'
+                  }`}
+                >
+                  <LogOut size={16} /> Sign out
+                </button>
+              )}
+            </div>
+          </div>
         </div>
       )}
     </header>

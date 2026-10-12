@@ -2,7 +2,8 @@
 
 import { useAuth } from '@/lib/auth-context';
 import { OrderApi } from '@/lib/api';
-import { ArrowRight, Loader2, Printer, Receipt, RefreshCw, X } from 'lucide-react';
+import { downloadReceiptPdf } from '@/lib/receipt-pdf';
+import { ArrowRight, Download, Loader2, Receipt, RefreshCw, X } from 'lucide-react';
 import Image from 'next/image';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
@@ -182,17 +183,50 @@ function ReceiptModal({ order, onClose }: { order: OrderRecord; onClose: () => v
   const vat = vatFromInclusiveTotal(total);
   const currency = order.currency || 'USD';
   const isPaid = (order.payment_status || order.status || '').toLowerCase() === 'paid';
+  const [downloading, setDownloading] = useState(false);
+  const [downloadError, setDownloadError] = useState('');
+
+  const handleDownloadPdf = async () => {
+    setDownloading(true);
+    setDownloadError('');
+    try {
+      await downloadReceiptPdf({
+        orderRef: orderRefFor(order),
+        paymentId: paymentIdFor(order),
+        paidAtLabel: formatFullDateTime(order.paid_at ?? order.created_at),
+        statusLabel: isPaid ? 'Paid' : statusLabel(order.payment_status || order.status),
+        currency,
+        total,
+        vat,
+        vatRatePercent: VAT_RATE * 100,
+        items: items.map((item) => ({
+          id: item.id,
+          dataLabel: formatItemData(item),
+          validityDays: item.validity_days,
+          price: Number(item.price),
+          currency: item.currency ?? currency,
+        })),
+        merchant: MERCHANT,
+      });
+    } catch (e: unknown) {
+      const msg =
+        e instanceof Error ? e.message : typeof e === 'string' ? e : 'Could not download PDF.';
+      setDownloadError(msg || 'Could not download PDF.');
+    } finally {
+      setDownloading(false);
+    }
+  };
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/40 px-0 sm:px-4 print:bg-white print:static"
+      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/40 px-0 sm:px-4"
       onClick={onClose}
     >
       <div
-        className="receipt-print bg-white rounded-t-3xl sm:rounded-2xl border border-slate-100 w-full sm:max-w-sm max-h-[90vh] overflow-y-auto p-6 print:max-h-none print:overflow-visible print:border-0 print:rounded-none print:shadow-none"
+        className="bg-white rounded-t-3xl sm:rounded-2xl border border-slate-100 w-full sm:max-w-sm max-h-[90vh] overflow-y-auto p-6"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-start justify-between mb-1 print:hidden">
+        <div className="flex items-start justify-between mb-1">
           <div />
           <button
             type="button"
@@ -285,35 +319,25 @@ function ReceiptModal({ order, onClose }: { order: OrderRecord; onClose: () => v
           </div>
         </div>
 
+        {downloadError && (
+          <p className="mt-4 text-xs font-medium text-red-600 text-center">{downloadError}</p>
+        )}
+
         <button
           type="button"
-          onClick={() => window.print()}
-          className="print:hidden mt-6 w-full inline-flex items-center justify-center gap-2 py-3 rounded-xl text-sm font-bold text-white hover:opacity-90"
+          onClick={() => void handleDownloadPdf()}
+          disabled={downloading}
+          className="mt-6 w-full inline-flex items-center justify-center gap-2 py-3 rounded-xl text-sm font-bold text-white hover:opacity-90 disabled:opacity-60"
           style={{ backgroundColor: '#112116' }}
         >
-          <Printer size={16} />
-          Download / Save as PDF
+          {downloading ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}
+          {downloading ? 'Preparing PDF…' : 'Download PDF'}
         </button>
+        <p className="mt-2 text-[11px] text-slate-400 text-center leading-relaxed">
+          Saves a PDF to your device. On phones, you may get a share sheet — choose Save to Files
+          or your preferred app.
+        </p>
       </div>
-
-      <style jsx global>{`
-        @media print {
-          body * {
-            visibility: hidden;
-          }
-          .receipt-print,
-          .receipt-print * {
-            visibility: visible;
-          }
-          .receipt-print {
-            position: fixed;
-            inset: 0;
-            width: 100%;
-            max-width: 420px;
-            margin: 24px auto;
-          }
-        }
-      `}</style>
     </div>
   );
 }
