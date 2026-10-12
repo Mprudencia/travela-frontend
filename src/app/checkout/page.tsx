@@ -19,6 +19,7 @@ import {
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
+import NationalitySelect from '@/components/checkout/NationalitySelect';
 import LegalAcceptance from '@/components/legal/LegalAcceptance';
 import { AuthApi, extractAuthTokenFromBody, OrderApi } from '@/lib/api';
 import { AUTH_STORAGE_SYNC } from '@/lib/auth-context';
@@ -70,52 +71,6 @@ const KYC_PLACEHOLDER = {
   gender: 'Other' as const,
   reason_for_travel: 'Tourism' as const,
 };
-
-const NATIONALITIES = [
-  'Tanzanian',
-  'Kenyan',
-  'Ugandan',
-  'Rwandan',
-  'Burundian',
-  'Congolese',
-  'South African',
-  'Nigerian',
-  'Ghanaian',
-  'Ethiopian',
-  'Egyptian',
-  'Moroccan',
-  'American',
-  'British',
-  'Canadian',
-  'Australian',
-  'German',
-  'French',
-  'Italian',
-  'Spanish',
-  'Dutch',
-  'Belgian',
-  'Swiss',
-  'Swedish',
-  'Norwegian',
-  'Danish',
-  'Finnish',
-  'Irish',
-  'Portuguese',
-  'Polish',
-  'Russian',
-  'Turkish',
-  'Indian',
-  'Chinese',
-  'Japanese',
-  'Korean',
-  'Emirati',
-  'Saudi',
-  'Israeli',
-  'Brazilian',
-  'Mexican',
-  'Argentine',
-  'Other',
-] as const;
 
 type Step = 'register' | 'otp' | 'payment' | 'success';
 
@@ -1085,20 +1040,11 @@ export default function CheckoutPage() {
                 <label className="text-xs font-bold text-slate-500 uppercase tracking-wide mb-1.5 block">
                   Nationality <span className="text-red-400">*</span>
                 </label>
-                <select
+                <NationalitySelect
                   value={nationality}
-                  onChange={(e) => setNationality(e.target.value)}
-                  className="w-full px-4 py-3 rounded-xl border border-slate-200 text-sm text-slate-800 bg-white focus:outline-none focus:border-slate-400"
-                >
-                  <option value="" disabled>
-                    Select your nationality
-                  </option>
-                  {NATIONALITIES.map((n) => (
-                    <option key={n} value={n}>
-                      {n}
-                    </option>
-                  ))}
-                </select>
+                  onChange={setNationality}
+                  placeholder="Select your nationality"
+                />
               </div>
 
               <div>
