@@ -1,10 +1,18 @@
 'use client';
 
 import { useAuth } from '@/lib/auth-context';
-import { Mail } from 'lucide-react';
+import { Mail, Phone } from 'lucide-react';
 import Image from 'next/image';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
+
+const CONTACT = {
+  company: 'Onnela Limited',
+  address: 'New Bagamoyo Road, Tan House, 9th floor, P.O. Box 77499, 14112 Dar es Salaam, Tanzania',
+  email: 'hello@onnelalimited.com',
+  phone: '+255 725 110 110',
+  phoneHref: 'tel:+255725110110',
+} as const;
 
 export default function Footer() {
   const { isAuthenticated, isLoading } = useAuth();
@@ -23,9 +31,9 @@ export default function Footer() {
   return (
     <footer style={{ backgroundColor: '#112116' }} className="text-white">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-8">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-8">
           {/* Brand */}
-          <div className="md:col-span-2">
+          <div>
             {/* Travela logo */}
             <div className="mb-3">
               <Image
@@ -54,7 +62,6 @@ export default function Footer() {
               />
             </div>
           </div>
-    
 
           {/* Product */}
           <div>
@@ -131,13 +138,67 @@ export default function Footer() {
                 </svg>
               </a>
               <a
-                href="mailto:hello@thetravela.com"
+                href={`mailto:${CONTACT.email}`}
                 className="w-8 h-8 rounded-full bg-white/10 flex items-center justify-center hover:bg-white/20 transition-colors"
                 aria-label="Email"
               >
                 <Mail size={15} />
               </a>
+              <a
+                href={CONTACT.phoneHref}
+                className="w-8 h-8 rounded-full bg-white/10 flex items-center justify-center hover:bg-white/20 transition-colors"
+                aria-label="Phone"
+              >
+                <Phone size={15} />
+              </a>
             </div>
+          </div>
+
+          {/* Contact */}
+          <div>
+            <h3 className="text-xs font-bold uppercase tracking-widest text-white/40 mb-4">
+              Contact
+            </h3>
+            <dl className="space-y-4">
+              <div>
+                <dt className="text-[11px] font-bold uppercase tracking-widest text-white/40 mb-1">
+                  Company
+                </dt>
+                <dd className="text-sm text-white/80">{CONTACT.company}</dd>
+              </div>
+              <div>
+                <dt className="text-[11px] font-bold uppercase tracking-widest text-white/40 mb-1">
+                  Address
+                </dt>
+                <dd className="text-sm text-white/80 leading-relaxed">{CONTACT.address}</dd>
+              </div>
+              <div>
+                <dt className="text-[11px] font-bold uppercase tracking-widest text-white/40 mb-1">
+                  Email
+                </dt>
+                <dd>
+                  <a
+                    href={`mailto:${CONTACT.email}`}
+                    className="text-sm text-white/80 hover:text-white transition-colors"
+                  >
+                    {CONTACT.email}
+                  </a>
+                </dd>
+              </div>
+              <div>
+                <dt className="text-[11px] font-bold uppercase tracking-widest text-white/40 mb-1">
+                  Mobile
+                </dt>
+                <dd>
+                  <a
+                    href={CONTACT.phoneHref}
+                    className="text-sm text-white/80 hover:text-white transition-colors"
+                  >
+                    {CONTACT.phone}
+                  </a>
+                </dd>
+              </div>
+            </dl>
           </div>
         </div>
 
