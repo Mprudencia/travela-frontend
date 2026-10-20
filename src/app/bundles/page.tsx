@@ -172,6 +172,13 @@ function BundlesContent() {
       }
     }
 
+    // Generate a one-time nonce so checkout can detect cart tampering.
+    const cartNonce =
+      typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+        ? crypto.randomUUID()
+        : `n_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    sessionStorage.setItem('travela:cartNonce', cartNonce);
+
     localStorage.setItem(
       'cart',
       JSON.stringify({
@@ -180,6 +187,9 @@ function BundlesContent() {
         countryName,
         simType: SIM_TYPE,
         checkoutMode,
+        // Security metadata — validated in checkout
+        _cartCreatedAt: new Date().toISOString(),
+        _cartNonce: cartNonce,
         ...(checkoutMode === 'topup'
           ? { user_esim_id, msisdn, current_data_mb }
           : {}),

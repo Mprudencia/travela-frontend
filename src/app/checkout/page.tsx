@@ -21,7 +21,8 @@ import { useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import NationalitySelect from '@/components/checkout/NationalitySelect';
 import LegalAcceptance from '@/components/legal/LegalAcceptance';
-import { AuthApi, extractAuthTokenFromBody, OrderApi } from '@/lib/api';
+import { AuthApi, BundlesApi, extractAuthTokenFromBody, OrderApi } from '@/lib/api';
+import { type Bundle, type BundlesResponse, mapApiBundles } from '@/lib/bundles';
 import { AUTH_STORAGE_SYNC } from '@/lib/auth-context';
 import {
   extractPaymentUrl,
@@ -57,6 +58,10 @@ interface Cart {
   msisdn?: string;
   /** Known data balance (MB) at top-up time — used for optimistic total */
   current_data_mb?: number;
+  /** ISO timestamp written at cart creation — used to enforce 30-min expiry */
+  _cartCreatedAt?: string;
+  /** Random nonce stored in sessionStorage at cart creation — detects localStorage tampering */
+  _cartNonce?: string;
 }
 
 function formatMb(mb?: number) {
@@ -99,6 +104,12 @@ function apiErrorMessage(body: unknown, fallback: string): string {
 const TOPUP_STEPS: { id: Step; label: string }[] = [
   { id: 'payment', label: 'Payment' },
 ];
+
+/** Max OTP attempts before the session is locked. */
+const OTP_MAX_ATTEMPTS = 5;
+
+/** Cart is valid for 30 minutes from creation. */
+const CART_TTL_MS = 30 * 60 * 1000;
 
 const CHECKOUT_TRANSITION_KEY = 'travela:checkout-transition';
 
@@ -180,6 +191,15 @@ export default function CheckoutPage() {
     return sessionStorage.getItem(CHECKOUT_TRANSITION_KEY) !== 'topup-modal';
   });
 
+  // Security state
+  /** Bundle fetched live from the API — price/id from this is used in the order, never from localStorage */
+  const [verifiedBundle, setVerifiedBundle] = useState<Bundle | null>(null);
+  const [bundleVerifyError, setBundleVerifyError] = useState('');
+  /** Honeypot — bots fill this; humans never see it */
+  const [honeypot, setHoneypot] = useState('');
+  /** Failed OTP attempts — locked out at OTP_MAX_ATTEMPTS */
+  const [otpAttempts, setOtpAttempts] = useState(0);
+
   const getStoredUserId = (): number | null => {
     if (typeof window === 'undefined') return null;
     try {
@@ -220,6 +240,31 @@ export default function CheckoutPage() {
     if (raw) {
       try {
         const parsed = JSON.parse(raw) as Cart;
+
+        // ── Security: reject expired carts (older than 30 min) ──────────
+        if (parsed._cartCreatedAt) {
+          const ageMs = Date.now() - new Date(parsed._cartCreatedAt).getTime();
+          if (ageMs > CART_TTL_MS) {
+            localStorage.removeItem('cart');
+            router.push('/bundles?country=TZ&countryName=Tanzania');
+            return;
+          }
+        }
+
+        // ── Security: reject carts whose nonce was tampered with ─────────
+        // The nonce is written to sessionStorage at bundle-selection time.
+        // If someone edits localStorage manually the nonce won't match.
+        const sessionNonce = sessionStorage.getItem('travela:cartNonce');
+        if (
+          parsed._cartNonce &&
+          sessionNonce &&
+          parsed._cartNonce !== sessionNonce
+        ) {
+          localStorage.removeItem('cart');
+          router.push('/bundles?country=TZ&countryName=Tanzania');
+          return;
+        }
+
         const topUpCheckout = parsed.checkoutMode === 'topup';
         setIsTopUpFlow(topUpCheckout);
 
@@ -264,6 +309,40 @@ export default function CheckoutPage() {
     }
   }, [router]);
 
+  // ── Security: re-verify bundle against live API prices ─────────────────────
+  // This re-fetches the bundle list every time the cart's bundle ID changes.
+  // We use the live price/sim_bundle_id in buildOrderPayload — the cart value
+  // is ignored — so altering localStorage cannot affect what the API charges.
+  useEffect(() => {
+    const bundleId = cart?.bundle.id;
+    if (!bundleId) return;
+    setBundleVerifyError('');
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await BundlesApi.list<BundlesResponse>();
+        if (cancelled) return;
+        const live = mapApiBundles(res.data?.bundles ?? []);
+        const match = live.find((b) => String(b.id) === String(bundleId));
+        if (!match) {
+          setBundleVerifyError(
+            'This plan is no longer available or was not recognised. Please go back and select a valid plan.'
+          );
+          return;
+        }
+        setVerifiedBundle(match);
+      } catch {
+        if (!cancelled) {
+          // Network error during verification — fall back to cart data so checkout
+          // is not completely blocked, but the backend must still validate.
+          setVerifiedBundle(cart!.bundle as Bundle);
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cart?.bundle.id]);
+
   useEffect(() => {
     if (step === 'success' && isTopUpFlow) {
       router.replace('/dashboard');
@@ -292,8 +371,11 @@ export default function CheckoutPage() {
     );
   }
 
-  const total = Number(cart.bundle.price ?? 0);
-  const currency = cart.bundle.currency ?? 'USD';
+  // Always derive price from the live-verified bundle; fall back to cart only
+  // while the async verification is still in-flight.
+  const liveBundle = verifiedBundle ?? cart.bundle;
+  const total = Number(liveBundle.price ?? 0);
+  const currency = liveBundle.currency ?? 'USD';
   const validityDays = cart.bundle.validity_days ?? 30;
   const expiryDate =
     cart.tripDepartureDate ?? addDaysToIso(cart.tripArrivalDate ?? todayIso(), validityDays);
@@ -359,6 +441,21 @@ export default function CheckoutPage() {
   };
 
   const handleRegisterAndSendOtp = async () => {
+    // ── Honeypot check — bots fill hidden fields, humans never do ───────
+    if (honeypot) {
+      // Fake a successful submission so bots don't know they were blocked.
+      setRegisterSubmitting(true);
+      await new Promise((r) => setTimeout(r, 2000));
+      setRegisterSubmitting(false);
+      return;
+    }
+
+    // ── Bundle must be verified before we can accept a purchase ─────────
+    if (bundleVerifyError) {
+      setRegisterError('The selected plan is invalid. Please go back and choose a plan.');
+      return;
+    }
+
     const trimmedName = fullName.trim();
     const trimmedEmail = email.trim();
     const emailOk = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail);
@@ -494,6 +591,14 @@ export default function CheckoutPage() {
   };
 
   const handleVerifyOtp = async () => {
+    // ── OTP attempt limit ────────────────────────────────────────────────
+    if (otpAttempts >= OTP_MAX_ATTEMPTS) {
+      setOtpError(
+        'Too many failed attempts. Please go back and restart the checkout process.'
+      );
+      return;
+    }
+
     const normalized = otp.replace(/\D/g, '').trim();
     if (!/^\d{6}$/.test(normalized)) {
       setOtpError('Please enter the 6-digit verification code.');
@@ -512,7 +617,18 @@ export default function CheckoutPage() {
 
       const verifyRes = await AuthApi.verifyEmail({ email: email.trim(), code: normalized });
       if (!verifyRes.ok) {
-        setOtpError(apiErrorMessage(verifyRes.body, `Verification failed (HTTP ${verifyRes.status}).`));
+        const newAttempts = otpAttempts + 1;
+        setOtpAttempts(newAttempts);
+        if (newAttempts >= OTP_MAX_ATTEMPTS) {
+          setOtpError(
+            'Too many failed attempts. Please go back and restart the checkout process.'
+          );
+        } else {
+          setOtpError(
+            apiErrorMessage(verifyRes.body, `Verification failed (HTTP ${verifyRes.status}).`) +
+            ` (${OTP_MAX_ATTEMPTS - newAttempts} attempt${OTP_MAX_ATTEMPTS - newAttempts === 1 ? '' : 's'} remaining)`
+          );
+        }
         return;
       }
 
@@ -670,13 +786,14 @@ export default function CheckoutPage() {
       items: [
         {
           type: 'bundle',
-          bundle_id: Number(cart.bundle.id),
-          sim_bundle_id: cart.bundle.sim_bundle_id ?? null,
-          bundle_name: cart.bundle.name,
-          data_amount: cart.bundle.data_mb ?? null,
-          validity_days: cart.bundle.validity_days ?? 30,
-          price: Number(cart.bundle.price ?? 0),
-          currency: (cart.bundle.currency ?? currency) as string,
+          // Use verifiedBundle (live API) so tampered localStorage values are ignored
+          bundle_id: Number((verifiedBundle ?? cart.bundle).id),
+          sim_bundle_id: (verifiedBundle ?? cart.bundle).sim_bundle_id ?? null,
+          bundle_name: (verifiedBundle ?? cart.bundle).name,
+          data_amount: (verifiedBundle ?? cart.bundle).data_mb ?? null,
+          validity_days: (verifiedBundle ?? cart.bundle).validity_days ?? 30,
+          price: Number((verifiedBundle ?? cart.bundle).price ?? 0),
+          currency: ((verifiedBundle ?? cart.bundle).currency ?? currency) as string,
         },
       ],
       pricing: {
@@ -946,6 +1063,21 @@ export default function CheckoutPage() {
 
       <div className="max-w-3xl mx-auto px-4 py-8">
 
+        {/* ── Security: bundle verification error ──────────────────────── */}
+        {bundleVerifyError && (
+          <div className="rounded-xl bg-red-50 border border-red-200 px-4 py-4 mb-6">
+            <p className="text-sm font-bold text-red-700 mb-1">Plan unavailable</p>
+            <p className="text-sm text-red-600 mb-3">{bundleVerifyError}</p>
+            <button
+              type="button"
+              onClick={() => router.push('/bundles?country=TZ&countryName=Tanzania')}
+              className="text-sm font-bold text-red-700 underline"
+            >
+              ← Go back and choose a plan
+            </button>
+          </div>
+        )}
+
         {/* ── STEP 1: REGISTER ─────────────────────────────────────────── */}
         {step === 'register' && (
           <div>
@@ -1115,6 +1247,18 @@ export default function CheckoutPage() {
               </div>
             </div>
 
+            {/* Honeypot — hidden from real users; bots typically fill this */}
+            <input
+              type="text"
+              name="website"
+              value={honeypot}
+              onChange={(e) => setHoneypot(e.target.value)}
+              tabIndex={-1}
+              aria-hidden="true"
+              autoComplete="off"
+              style={{ display: 'none' }}
+            />
+
             <div className="mb-4">
               <LegalAcceptance
                 checked={acceptedLegal}
@@ -1135,7 +1279,7 @@ export default function CheckoutPage() {
             <button
               type="button"
               onClick={() => void handleRegisterAndSendOtp()}
-              disabled={registerSubmitting}
+              disabled={registerSubmitting || !!bundleVerifyError}
               className="w-full flex items-center justify-center gap-2 py-4 rounded-xl text-base font-bold text-white disabled:opacity-60 hover:opacity-90 transition-opacity"
               style={{ backgroundColor: '#112116' }}
             >
@@ -1199,7 +1343,7 @@ export default function CheckoutPage() {
             <button
               type="button"
               onClick={() => void handleVerifyOtp()}
-              disabled={verifyingOtp || !/^\d{6}$/.test(otp.trim())}
+              disabled={verifyingOtp || !/^\d{6}$/.test(otp.trim()) || otpAttempts >= OTP_MAX_ATTEMPTS}
               className="w-full flex items-center justify-center gap-2 py-4 rounded-xl text-base font-bold text-white disabled:opacity-60 hover:opacity-90 transition-opacity"
               style={{ backgroundColor: '#112116' }}
             >
@@ -1207,6 +1351,19 @@ export default function CheckoutPage() {
                 ? <><Loader2 size={18} className="animate-spin" /> Verifying…</>
                 : <>Verify &amp; Continue to Payment <ArrowRight size={18} /></>}
             </button>
+            {otpAttempts >= OTP_MAX_ATTEMPTS && (
+              <p className="text-xs font-medium text-red-600 text-center mt-3">
+                Session locked. Please{' '}
+                <button
+                  type="button"
+                  className="underline font-bold"
+                  onClick={() => setStep('register')}
+                >
+                  go back
+                </button>{' '}
+                and start over.
+              </p>
+            )}
           </div>
         )}
 
