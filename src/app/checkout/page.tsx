@@ -235,8 +235,10 @@ export default function CheckoutPage() {
         }
 
         const defaults = defaultActivationDates();
+        // Physical SIM is paused until booth delivery is available — force eSIM.
         const withActivationDates: Cart = {
           ...parsed,
+          simType: 'esim',
           tripArrivalDate: parsed.tripArrivalDate ?? defaults.tripArrivalDate,
           tripDepartureDate: parsed.tripDepartureDate ?? defaults.tripDepartureDate,
         };

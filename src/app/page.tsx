@@ -66,7 +66,7 @@ const howItWorks = [
     icon: <Wifi size={28} />,
     num: '1',
     title: 'Choose Your Plan',
-    desc: 'Travela is your eSIM & SIM card solution for seamless connectivity in Tanzania.',
+    desc: 'Travela is your eSIM solution for seamless connectivity in Tanzania.',
   },
   {
     icon: <Zap size={28} />,
@@ -316,14 +316,14 @@ export default function LandingPage() {
                 className="inline-flex items-center rounded-full px-3 py-1 text-xs font-bold tracking-wide uppercase mb-5"
                 style={{ backgroundColor: 'rgba(23,207,84,0.18)', color: '#17cf54' }}
               >
-                Tanzania eSIM &amp; SIM
+                Tanzania eSIM
               </p>
               <h2 className="text-3xl sm:text-4xl font-extrabold mb-4">
                 Ready to travel{' '}
                 <span style={{ color: '#17cf54' }}>connected</span>?
               </h2>
               <p className="text-base text-white/80 mb-8">
-                Join thousands of travellers staying connected across Africa with Travela eSIMs and SIM cards.
+                Join thousands of travellers staying connected across Africa with Travela eSIMs.
               </p>
               <button
                 type="button"
@@ -331,7 +331,7 @@ export default function LandingPage() {
                 className="inline-flex items-center gap-2 px-8 py-4 rounded-xl text-base font-bold transition-opacity hover:opacity-90"
                 style={{ backgroundColor: '#17cf54', color: '#112116' }}
               >
-                Get your SIM now <ArrowRight size={18} />
+                Get your eSIM now <ArrowRight size={18} />
               </button>
             </div>
           </div>
@@ -418,15 +418,16 @@ export default function LandingPage() {
                       3
                     </span>
                     <span>
-                      If you don&apos;t see it, your phone doesn&apos;t support eSIM — choose a{' '}
-                      <span className="font-extrabold">physical SIM</span> on the next page instead.
+                      If you don&apos;t see it, your phone doesn&apos;t support eSIM. We currently
+                      offer <span className="font-extrabold">eSIM only</span> — please use a
+                      compatible device to continue.
                     </span>
                   </li>
                 </ol>
               </div>
 
               <p className="text-xs text-slate-400 text-center mb-5">
-                You can pick eSIM or physical SIM after you proceed.
+                Physical SIM cards will be available once our booth opens.
               </p>
 
               <button

@@ -46,7 +46,7 @@ export default function Footer() {
             </div>
 
             <p className="text-sm text-white/60 leading-relaxed max-w-xs mb-5">
-              Stay connected across Africa with instant eSIM and physical SIM cards.
+              Stay connected across Africa with instant eSIM.
               No roaming fees, just seamless travel connectivity.
             </p>
             <span className="text-xs text-white/40">Powered by</span>
@@ -70,7 +70,7 @@ export default function Footer() {
             </h3>
             <ul className="space-y-2">
               {[
-                { href: '/bundles?country=TZ&countryName=Tanzania', label: 'Get eSIM / SIM' },
+                { href: '/bundles?country=TZ&countryName=Tanzania', label: 'Get eSIM' },
                 { href: '/dashboard', label: 'Dashboard' },
                 { href: '/receipts', label: 'Transaction History' },
               ].map((l) => (

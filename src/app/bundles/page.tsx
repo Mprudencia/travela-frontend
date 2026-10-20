@@ -1,6 +1,6 @@
 'use client';
 
-import { ArrowRight, Check, Loader2, Package, Smartphone, Wifi } from 'lucide-react';
+import { ArrowRight, Check, Loader2, Package, Smartphone } from 'lucide-react';
 import Image from 'next/image';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Suspense, useEffect, useLayoutEffect, useRef, useState } from 'react';
@@ -18,7 +18,8 @@ import { dataMbFromAssignment } from '@/lib/esim-balance';
 
 type CheckoutMode = 'standard' | 'topup';
 
-type SimType = 'esim' | 'physical';
+/** Physical SIM pickup is paused until the booth is available. */
+const SIM_TYPE = 'esim' as const;
 
 /** Prefer a column count that fills rows evenly (e.g. 4 → 2×2, not 3+1). */
 function bundleColumnCount(n: number): 1 | 2 | 3 {
@@ -55,11 +56,9 @@ function BundlesContent() {
   const [bundles, setBundles] = useState<Bundle[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedBundleId, setSelectedBundleId] = useState<string | number | null>(null);
-  const [simType, setSimType] = useState<SimType | null>(null);
   const [browseAllPlans, setBrowseAllPlans] = useState(false);
 
   const step2Ref = useRef<HTMLDivElement>(null);
-  const step3Ref = useRef<HTMLDivElement>(null);
 
   useLayoutEffect(() => {
     const previous = history.scrollRestoration;
@@ -103,21 +102,11 @@ function BundlesContent() {
     if (match) setSelectedBundleId(match.id);
   }, [bundleIdParam, bundles]);
 
-  // After SIM type is chosen → scroll to plans (or Continue if a plan is already picked)
+  // After plan is chosen → scroll to Continue
   useEffect(() => {
-    if (!simType) return;
-    const target = selectedBundleId ? step3Ref.current : step2Ref.current;
-    const t = setTimeout(() => scrollToEl(target), 80);
+    if (!selectedBundleId) return;
+    const t = setTimeout(() => scrollToEl(step2Ref.current), 100);
     return () => clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- only on SIM pick
-  }, [simType]);
-
-  // After plan is chosen (and SIM already chosen) → scroll to Continue
-  useEffect(() => {
-    if (!simType || !selectedBundleId) return;
-    const t = setTimeout(() => scrollToEl(step3Ref.current), 100);
-    return () => clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- only on plan pick
   }, [selectedBundleId]);
 
   const selectedBundle = bundles.find((b) => String(b.id) === String(selectedBundleId)) ?? null;
@@ -128,18 +117,14 @@ function BundlesContent() {
   const bundleCols = bundleColumnCount(bundles.length);
   const bundleCardWidth = bundleCardWidthClass(bundleCols);
 
-  const currentStep = !simType ? 1 : !selectedBundle ? 2 : 3;
-
-  const selectSimType = (type: SimType) => {
-    setSimType(type);
-  };
+  const currentStep = !selectedBundle ? 1 : 2;
 
   const selectBundle = (id: string | number) => {
     setSelectedBundleId(id);
   };
 
   const handleCheckout = async () => {
-    if (!selectedBundle || !simType) return;
+    if (!selectedBundle) return;
     const isRegisteredCustomer = !!localStorage.getItem('token');
     const checkoutMode: CheckoutMode =
       topupParam === '1' || isRegisteredCustomer ? 'topup' : 'standard';
@@ -193,7 +178,7 @@ function BundlesContent() {
         bundle: selectedBundle,
         country,
         countryName,
-        simType,
+        simType: SIM_TYPE,
         checkoutMode,
         ...(checkoutMode === 'topup'
           ? { user_esim_id, msisdn, current_data_mb }
@@ -204,9 +189,8 @@ function BundlesContent() {
   };
 
   const steps = [
-    { n: 1, label: 'SIM type' },
-    { n: 2, label: 'Data plan' },
-    { n: 3, label: 'Continue' },
+    { n: 1, label: 'Data plan' },
+    { n: 2, label: 'Continue' },
   ];
 
   return (
@@ -230,10 +214,10 @@ function BundlesContent() {
             Tanzania mainland and Zanzibar
           </p>
           <h1 className="text-3xl sm:text-4xl font-extrabold text-white mb-2">
-            {preselectedBundle ? 'How Would You Like to Connect?' : 'Choose Your Data Plan'}
+            {preselectedBundle ? 'Confirm Your eSIM Plan' : 'Choose Your eSIM Plan'}
           </h1>
           <p className="text-white/60 text-base max-w-2xl mx-auto leading-relaxed mb-6">
-            Three quick steps. Pick your SIM type, then your plan, then continue.
+            Two quick steps. Confirm your phone supports eSIM, pick a plan, then continue.
           </p>
 
           {/* Step progress */}
@@ -281,8 +265,31 @@ function BundlesContent() {
       </div>
 
       <div className="max-w-4xl mx-auto px-4 py-8">
-        {/* Step 1 — SIM Type */}
-        <div id="step-sim" className="scroll-mt-24">
+        {/* eSIM compatibility reminder */}
+        <div className="bg-white rounded-2xl border border-slate-200 p-5 mb-8">
+          <div className="flex gap-3">
+            <div
+              className="w-10 h-10 rounded-full flex-shrink-0 flex items-center justify-center"
+              style={{ backgroundColor: 'rgba(17,33,22,0.08)', color: '#112116' }}
+            >
+              <Smartphone size={20} />
+            </div>
+            <div>
+              <p className="text-sm font-extrabold text-slate-900 mb-1">
+                Check that your phone supports eSIM
+              </p>
+              <p className="text-xs text-slate-500 leading-relaxed">
+                Dial <span className="font-bold text-slate-700">*#06#</span> on your phone. If you
+                see an <span className="font-bold text-slate-700">EID</span> number with a barcode,
+                you&apos;re good to go. We currently offer eSIM only — physical SIM cards will be
+                available once our booth opens.
+              </p>
+            </div>
+          </div>
+        </div>
+
+        {/* Step 1 — Bundles */}
+        <div id="step-plan" className="scroll-mt-24">
           <div className="flex items-center gap-2 mb-3">
             <span
               className="text-[11px] font-extrabold px-2 py-0.5 rounded-full"
@@ -290,243 +297,150 @@ function BundlesContent() {
             >
               Step 1
             </span>
-            <p className="text-sm font-bold text-slate-700">Choose your SIM type</p>
+            <p className="text-sm font-bold text-slate-700">Choose your data plan</p>
           </div>
-          <div className="bg-white rounded-2xl border border-slate-200 p-5 mb-8">
-            <p className="text-xs text-slate-500 mb-4 leading-relaxed">
-              Dial <span className="font-bold text-slate-700">*#06#</span> in your phone. If you see
-              an EID number with a barcode, pick eSIM. If not, pick physical SIM.
-            </p>
-            <div className="grid grid-cols-2 gap-3">
-              <button
-                type="button"
-                onClick={() => selectSimType('esim')}
-                className="flex flex-col items-center gap-3 p-5 rounded-xl border-2 transition-all text-center"
-                style={
-                  simType === 'esim'
-                    ? { borderColor: '#112116', backgroundColor: 'rgba(17,33,22,0.05)' }
-                    : { borderColor: '#e2e8f0', backgroundColor: 'white' }
-                }
-              >
-                <div
-                  className="w-12 h-12 rounded-full flex items-center justify-center"
-                  style={{
-                    backgroundColor: simType === 'esim' ? '#112116' : '#f1f5f9',
-                    color: simType === 'esim' ? 'white' : '#64748b',
-                  }}
-                >
-                  <Wifi size={22} />
-                </div>
-                <div>
-                  <p className="text-sm font-extrabold text-slate-900">eSIM</p>
-                  <p className="text-xs text-slate-500 mt-0.5">
-                    Digital, you choose the activation date
-                  </p>
-                </div>
-                {simType === 'esim' && (
-                  <span
-                    className="text-xs font-bold px-2.5 py-0.5 rounded-full"
-                    style={{ backgroundColor: '#17cf54', color: '#112116' }}
-                  >
-                    Selected
-                  </span>
-                )}
-              </button>
 
-              <button
-                type="button"
-                onClick={() => selectSimType('physical')}
-                className="flex flex-col items-center gap-3 p-5 rounded-xl border-2 transition-all text-center"
-                style={
-                  simType === 'physical'
-                    ? { borderColor: '#112116', backgroundColor: 'rgba(17,33,22,0.05)' }
-                    : { borderColor: '#e2e8f0', backgroundColor: 'white' }
-                }
+          {loading ? (
+            <div className="flex items-center justify-center py-20">
+              <Loader2 size={28} className="animate-spin text-slate-400" />
+            </div>
+          ) : preselectedBundle ? (
+            <div className="max-w-sm mx-auto mb-8">
+              <div
+                className="rounded-2xl overflow-hidden border-2 bg-white shadow-md"
+                style={{ borderColor: '#112116' }}
               >
-                <div
-                  className="w-12 h-12 rounded-full flex items-center justify-center"
-                  style={{
-                    backgroundColor: simType === 'physical' ? '#112116' : '#f1f5f9',
-                    color: simType === 'physical' ? 'white' : '#64748b',
-                  }}
-                >
-                  <Smartphone size={22} />
+                <div className="relative h-40">
+                  <Image
+                    src={bundleImageFor(preselectedBundle.id)}
+                    alt=""
+                    fill
+                    sizes="(max-width: 640px) 100vw, 24rem"
+                    className="object-cover"
+                  />
                 </div>
-                <div>
-                  <p className="text-sm font-extrabold text-slate-900">Physical SIM</p>
-                  <p className="text-xs text-slate-500 mt-0.5">
-                    Plastic card, delivered or collected
+                <div className="p-5">
+                  <div className="flex items-center justify-between mb-0.5">
+                    <p className="text-lg font-black text-slate-900">{preselectedBundle.name}</p>
+                    <span
+                      className="inline-flex items-center gap-1 text-xs font-bold px-2.5 py-0.5 rounded-full flex-shrink-0"
+                      style={{ backgroundColor: '#17cf54', color: '#112116' }}
+                    >
+                      <Check size={12} /> Selected
+                    </span>
+                  </div>
+                  <h3 className="text-2xl font-black text-slate-900 mb-1 tracking-tight">
+                    {formatMb(preselectedBundle.data_mb)}
+                  </h3>
+                  {preselectedBundle.tagline && (
+                    <p className="text-xs font-semibold text-slate-600 mb-1">
+                      {preselectedBundle.tagline}
+                    </p>
+                  )}
+                  <p className="text-sm text-slate-500">
+                    {preselectedBundle.validity_days ?? 30} days,{' '}
+                    {preselectedBundle.currency ?? 'USD'}{' '}
+                    {Number(preselectedBundle.price ?? 0).toFixed(2)}
                   </p>
                 </div>
-                {simType === 'physical' && (
-                  <span
-                    className="text-xs font-bold px-2.5 py-0.5 rounded-full"
-                    style={{ backgroundColor: '#17cf54', color: '#112116' }}
-                  >
-                    Selected
-                  </span>
-                )}
+              </div>
+              <button
+                type="button"
+                onClick={() => setBrowseAllPlans(true)}
+                className="block w-full text-center mt-3 text-xs font-bold text-slate-500 hover:text-slate-800"
+              >
+                Choose a different plan
               </button>
             </div>
-          </div>
+          ) : bundles.length === 0 ? (
+            <div className="text-center py-20">
+              <Package size={40} className="mx-auto mb-4 text-slate-300" />
+              <p className="text-slate-500 font-medium">
+                No bundles available for this destination.
+              </p>
+            </div>
+          ) : (
+            <div className="flex flex-wrap justify-center gap-4 mb-8">
+              {bundles.map((bundle) => {
+                const isSelected = String(selectedBundleId) === String(bundle.id);
+                const imgSrc = bundleImageFor(bundle.id);
+                return (
+                  <button
+                    key={bundle.id}
+                    type="button"
+                    onClick={() => selectBundle(bundle.id)}
+                    className={`${bundleCardWidth} text-left rounded-2xl overflow-hidden border bg-white shadow-sm hover:shadow-md transition-all ${
+                      isSelected
+                        ? 'border-[#112116] shadow-md ring-2 ring-[#112116]'
+                        : 'border-slate-100'
+                    }`}
+                  >
+                    <div className="relative h-44">
+                      <Image
+                        src={imgSrc}
+                        alt=""
+                        fill
+                        sizes="(max-width: 640px) 100vw, 33vw"
+                        className="object-cover"
+                      />
+                    </div>
+
+                    <div className="p-5">
+                      <p className="text-lg font-black text-slate-900 mb-0.5">{bundle.name}</p>
+                      <h3 className="text-2xl font-black text-slate-900 mb-1 tracking-tight">
+                        {formatMb(bundle.data_mb)}
+                      </h3>
+                      {bundle.tagline && (
+                        <p className="text-xs font-semibold text-slate-600 mb-1">
+                          {bundle.tagline}
+                        </p>
+                      )}
+                      <p className="text-sm text-slate-500 mb-4">
+                        {bundle.validity_days ?? 30} days, {bundle.currency ?? 'USD'}{' '}
+                        {Number(bundle.price ?? 0).toFixed(2)}
+                      </p>
+
+                      <div
+                        className="w-full py-3 rounded-xl text-sm font-bold text-center transition-opacity flex items-center justify-center gap-2"
+                        style={
+                          isSelected
+                            ? { backgroundColor: '#17cf54', color: '#112116' }
+                            : { backgroundColor: '#112116', color: 'white' }
+                        }
+                      >
+                        {isSelected ? (
+                          <>
+                            <Check size={16} /> Selected
+                          </>
+                        ) : (
+                          'Select Plan'
+                        )}
+                      </div>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </div>
 
-        {/* Step 2 — Bundles (after SIM type) */}
-        {simType && (
-          <div ref={step2Ref} id="step-plan" className="scroll-mt-24">
-            <div className="flex items-center gap-2 mb-3">
-              <span
-                className="text-[11px] font-extrabold px-2 py-0.5 rounded-full"
-                style={{ backgroundColor: 'rgba(17,33,22,0.08)', color: '#112116' }}
-              >
-                Step 2
-              </span>
-              <p className="text-sm font-bold text-slate-700">Choose your data plan</p>
-            </div>
-
-            {loading ? (
-              <div className="flex items-center justify-center py-20">
-                <Loader2 size={28} className="animate-spin text-slate-400" />
-              </div>
-            ) : preselectedBundle ? (
-              <div className="max-w-sm mx-auto mb-8">
-                <div
-                  className="rounded-2xl overflow-hidden border-2 bg-white shadow-md"
-                  style={{ borderColor: '#112116' }}
-                >
-                  <div className="relative h-40">
-                    <Image
-                      src={bundleImageFor(preselectedBundle.id)}
-                      alt=""
-                      fill
-                      sizes="(max-width: 640px) 100vw, 24rem"
-                      className="object-cover"
-                    />
-                  </div>
-                  <div className="p-5">
-                    <div className="flex items-center justify-between mb-0.5">
-                      <p className="text-lg font-black text-slate-900">{preselectedBundle.name}</p>
-                      <span
-                        className="inline-flex items-center gap-1 text-xs font-bold px-2.5 py-0.5 rounded-full flex-shrink-0"
-                        style={{ backgroundColor: '#17cf54', color: '#112116' }}
-                      >
-                        <Check size={12} /> Selected
-                      </span>
-                    </div>
-                    <h3 className="text-2xl font-black text-slate-900 mb-1 tracking-tight">
-                      {formatMb(preselectedBundle.data_mb)}
-                    </h3>
-                    {preselectedBundle.tagline && (
-                      <p className="text-xs font-semibold text-slate-600 mb-1">
-                        {preselectedBundle.tagline}
-                      </p>
-                    )}
-                    <p className="text-sm text-slate-500">
-                      {preselectedBundle.validity_days ?? 30} days,{' '}
-                      {preselectedBundle.currency ?? 'USD'}{' '}
-                      {Number(preselectedBundle.price ?? 0).toFixed(2)}
-                    </p>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setBrowseAllPlans(true)}
-                  className="block w-full text-center mt-3 text-xs font-bold text-slate-500 hover:text-slate-800"
-                >
-                  Choose a different plan
-                </button>
-              </div>
-            ) : bundles.length === 0 ? (
-              <div className="text-center py-20">
-                <Package size={40} className="mx-auto mb-4 text-slate-300" />
-                <p className="text-slate-500 font-medium">
-                  No bundles available for this destination.
-                </p>
-              </div>
-            ) : (
-              <div className="flex flex-wrap justify-center gap-4 mb-8">
-                {bundles.map((bundle) => {
-                  const isSelected = String(selectedBundleId) === String(bundle.id);
-                  const imgSrc = bundleImageFor(bundle.id);
-                  return (
-                    <button
-                      key={bundle.id}
-                      type="button"
-                      onClick={() => selectBundle(bundle.id)}
-                      className={`${bundleCardWidth} text-left rounded-2xl overflow-hidden border bg-white shadow-sm hover:shadow-md transition-all ${
-                        isSelected
-                          ? 'border-[#112116] shadow-md ring-2 ring-[#112116]'
-                          : 'border-slate-100'
-                      }`}
-                    >
-                      <div className="relative h-44">
-                        <Image
-                          src={imgSrc}
-                          alt=""
-                          fill
-                          sizes="(max-width: 640px) 100vw, 33vw"
-                          className="object-cover"
-                        />
-                      </div>
-
-                      <div className="p-5">
-                        <p className="text-lg font-black text-slate-900 mb-0.5">{bundle.name}</p>
-                        <h3 className="text-2xl font-black text-slate-900 mb-1 tracking-tight">
-                          {formatMb(bundle.data_mb)}
-                        </h3>
-                        {bundle.tagline && (
-                          <p className="text-xs font-semibold text-slate-600 mb-1">
-                            {bundle.tagline}
-                          </p>
-                        )}
-                        <p className="text-sm text-slate-500 mb-4">
-                          {bundle.validity_days ?? 30} days, {bundle.currency ?? 'USD'}{' '}
-                          {Number(bundle.price ?? 0).toFixed(2)}
-                        </p>
-
-                        <div
-                          className="w-full py-3 rounded-xl text-sm font-bold text-center transition-opacity flex items-center justify-center gap-2"
-                          style={
-                            isSelected
-                              ? { backgroundColor: '#17cf54', color: '#112116' }
-                              : { backgroundColor: '#112116', color: 'white' }
-                          }
-                        >
-                          {isSelected ? (
-                            <>
-                              <Check size={16} /> Selected
-                            </>
-                          ) : (
-                            'Select Plan'
-                          )}
-                        </div>
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Step 3 — Continue (inline, not sticky footer) */}
-        {simType && selectedBundle && (
-          <div ref={step3Ref} id="step-continue" className="scroll-mt-28 mb-8">
+        {/* Step 2 — Continue */}
+        {selectedBundle && (
+          <div ref={step2Ref} id="step-continue" className="scroll-mt-28 mb-8">
             <div className="flex items-center gap-2 mb-3">
               <span
                 className="text-[11px] font-extrabold px-2 py-0.5 rounded-full"
                 style={{ backgroundColor: 'rgba(23,207,84,0.2)', color: '#112116' }}
               >
-                Step 3
+                Step 2
               </span>
               <p className="text-sm font-bold text-slate-700">Ready to continue</p>
             </div>
             <div className="bg-white rounded-2xl border border-slate-200 p-5">
               <p className="text-sm text-slate-600 mb-4">
                 You picked{' '}
-                <span className="font-extrabold text-slate-900">
-                  {simType === 'esim' ? 'eSIM' : 'Physical SIM'}
-                </span>{' '}
+                <span className="font-extrabold text-slate-900">eSIM</span>
+                {' '}
                 and{' '}
                 <span className="font-extrabold text-slate-900">{selectedBundle.name}</span>
                 {' '}
