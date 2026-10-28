@@ -19,6 +19,7 @@ interface User {
   id?: string | number;
   name?: string;
   email?: string;
+  email_verified?: boolean;
   [key: string]: unknown;
 }
 
@@ -30,6 +31,14 @@ interface AuthContextValue {
   login: (email: string, password: string) => Promise<void>;
   register: (data: Record<string, unknown>) => Promise<void>;
   logout: () => void;
+  /** Persist email_verified locally after a successful OTP verify. */
+  markEmailVerified: () => void;
+  /** After changing email — store the new address and mark unverified. */
+  setPendingEmail: (email: string) => void;
+  /** Replace the signed-in session (e.g. after registering a new email account). */
+  adoptSession: (authToken: string, authUser: User) => void;
+  /** Re-fetch /me so email_verified (and profile fields) stay in sync. */
+  refreshUser: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -196,9 +205,67 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       id: 1,
       name: (data.name as string) ?? 'Traveller',
       email: (data.email as string) ?? '',
+      email_verified: false,
     };
     persistSession(mockToken, mockUser);
   }, [persistSession]);
+
+  const markEmailVerified = useCallback(() => {
+    const current = readStoredUser();
+    if (!current) return;
+    const next: User = { ...current, email_verified: true };
+    localStorage.setItem('user', JSON.stringify(next));
+    setUser(next);
+    window.dispatchEvent(new Event(AUTH_STORAGE_SYNC));
+  }, []);
+
+  const setPendingEmail = useCallback((email: string) => {
+    const current = readStoredUser();
+    if (!current) return;
+    const next: User = {
+      ...current,
+      email: email.trim(),
+      email_verified: false,
+    };
+    localStorage.setItem('user', JSON.stringify(next));
+    setUser(next);
+    window.dispatchEvent(new Event(AUTH_STORAGE_SYNC));
+  }, []);
+
+  const adoptSession = useCallback(
+    (authToken: string, authUser: User) => {
+      // New account — drop purchase state tied to the previous user id.
+      localStorage.removeItem('lastPurchase');
+      localStorage.removeItem('pendingPayment');
+      persistSession(authToken, authUser);
+    },
+    [persistSession]
+  );
+
+  const refreshUser = useCallback(async () => {
+    const storedToken = localStorage.getItem('token');
+    if (!storedToken) return;
+
+    const result = await AuthApi.me();
+    if (!result.ok) {
+      if (result.status === 401) clearSession();
+      return;
+    }
+
+    const apiUser = extractUserFromAuthBody(result.body);
+    const cached = readStoredUser();
+    const merged: User = {
+      ...cached,
+      id: apiUser?.id ?? cached?.id,
+      name: apiUser?.name ?? cached?.name,
+      email: apiUser?.email ?? cached?.email,
+      email_verified: apiUser?.email_verified ?? cached?.email_verified,
+      role: apiUser?.role ?? cached?.role ?? 'user',
+    };
+    localStorage.setItem('user', JSON.stringify(merged));
+    setUser(merged);
+    window.dispatchEvent(new Event(AUTH_STORAGE_SYNC));
+  }, [clearSession]);
 
   return (
     <AuthContext.Provider
@@ -210,6 +277,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         login,
         register,
         logout,
+        markEmailVerified,
+        setPendingEmail,
+        adoptSession,
+        refreshUser,
       }}
     >
       {children}

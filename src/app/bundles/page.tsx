@@ -125,15 +125,16 @@ function BundlesContent() {
 
   const handleCheckout = async () => {
     if (!selectedBundle) return;
-    const isRegisteredCustomer = !!localStorage.getItem('token');
-    const checkoutMode: CheckoutMode =
-      topupParam === '1' || isRegisteredCustomer ? 'topup' : 'standard';
+    // Top-up only when explicitly requested (?topup=1). Logged-in users without a
+    // SIM must still be able to complete a first purchase via standard checkout.
+    const wantsTopup = topupParam === '1';
+    let checkoutMode: CheckoutMode = 'standard';
 
     let user_esim_id: number | undefined;
     let msisdn: string | undefined;
     let current_data_mb: number | undefined;
 
-    if (checkoutMode === 'topup') {
+    if (wantsTopup) {
       try {
         const res = await EsimsApi.listMine();
         if (!res.ok) {
@@ -166,6 +167,7 @@ function BundlesContent() {
         }
         current_data_mb =
           getOptimisticDataMb() ?? dataMbFromAssignment(first) ?? 0;
+        checkoutMode = 'topup';
       } catch {
         window.alert('Could not load your SIM. Try again from the dashboard.');
         return;

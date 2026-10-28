@@ -1,5 +1,6 @@
 'use client';
 
+import EmailVerificationBanner from '@/components/auth/EmailVerificationBanner';
 import ActivateEsimButton from '@/components/esim/ActivateEsimButton';
 import AssignSimPrompt from '@/components/esim/AssignSimPrompt';
 import QrCodePanel from '@/components/esim/QrCodePanel';
@@ -656,7 +657,9 @@ export default function DashboardPage() {
   const [assigningSim, setAssigningSim] = useState(false);
   const [promptError, setPromptError] = useState('');
   const [extendDate, setExtendDate] = useState('');
-  const datePromptDismissedRef = useRef(false);
+  /** Order id whose activation prompt the user already dismissed. `undefined` = none. */
+  const dismissedActivationOrderIdRef = useRef<number | null | undefined>(undefined);
+  const assignPromptOpenRef = useRef(false);
   const [topUpModalOpen, setTopUpModalOpen] = useState(false);
   const [topUpModalShown, setTopUpModalShown] = useState(false);
   const [topUpModalClosing, setTopUpModalClosing] = useState(false);
@@ -672,25 +675,47 @@ export default function DashboardPage() {
   ordersRef.current = orders;
   purchaseRef.current = purchase;
 
-  const loadOrders = useCallback(async () => {
+  const loadOrders = useCallback(async (): Promise<OrderRecord[]> => {
     setOrdersLoading(true);
     try {
       const res = await OrderApi.listMine();
       if (!res.ok) {
-        if (res.status === 401) {
-          setOrders([]);
-          return;
-        }
+        ordersRef.current = [];
         setOrders([]);
-        return;
+        return [];
       }
-      setOrders(parseOrdersFromBody(res.body));
+      const parsed = parseOrdersFromBody(res.body);
+      // Update the ref before React re-renders so the SIM watcher can read it
+      // in the same async turn.
+      ordersRef.current = parsed;
+      setOrders(parsed);
+      return parsed;
     } catch {
+      ordersRef.current = [];
       setOrders([]);
+      return [];
     } finally {
       setOrdersLoading(false);
     }
   }, []);
+
+  const showActivationPrompt = useCallback(
+    (orderId: number | null, activationIso: string | null) => {
+      setPromptActivationDate(activationIso);
+      setPromptOrderId(orderId);
+      const dismissed =
+        dismissedActivationOrderIdRef.current !== undefined &&
+        dismissedActivationOrderIdRef.current === orderId;
+      if (dismissed) return;
+      // Don't overwrite a date the user is already editing.
+      if (!assignPromptOpenRef.current && activationIso) {
+        setExtendDate(activationIso.slice(0, 10));
+      }
+      assignPromptOpenRef.current = true;
+      setAssignPrompt(true);
+    },
+    []
+  );
 
   const loadEsims = useCallback(async () => {
     setEsimsError('');
@@ -717,17 +742,15 @@ export default function DashboardPage() {
       setUserEsims(parsed.esims);
       setLatestOrderBundle(parsed.latestOrderBundle);
       if (parsed.assignmentPrompt?.status === 'awaiting_confirmation' && parsed.esims.length === 0) {
-        const activationIso = parsed.assignmentPrompt.activation_date ?? null;
-        setPromptActivationDate(activationIso);
-        setPromptOrderId(parsed.assignmentPrompt.order_id ?? null);
-        if (activationIso) {
-          setExtendDate(activationIso.slice(0, 10));
-        }
-        if (!datePromptDismissedRef.current) {
-          setAssignPrompt(true);
-        }
-      } else {
-        datePromptDismissedRef.current = false;
+        showActivationPrompt(
+          parsed.assignmentPrompt.order_id ?? null,
+          parsed.assignmentPrompt.activation_date ?? null
+        );
+      } else if (parsed.esims.length > 0 || parsed.assignmentPrompt?.status === 'scheduled') {
+        dismissedActivationOrderIdRef.current = undefined;
+        assignPromptOpenRef.current = false;
+        setAssignPrompt(false);
+      } else if (!assignPromptOpenRef.current) {
         setAssignPrompt(false);
       }
     } catch (e: unknown) {
@@ -737,7 +760,7 @@ export default function DashboardPage() {
       setUserEsims([]);
       setLatestOrderBundle(null);
     }
-  }, []);
+  }, [showActivationPrompt]);
 
   const loadEsimsRef = useRef(loadEsims);
   loadEsimsRef.current = loadEsims;
@@ -771,7 +794,8 @@ export default function DashboardPage() {
         setPromptError(apiErrorMessage(res.body, 'Could not update the eSIM activation date.'));
         return;
       }
-      datePromptDismissedRef.current = true;
+      dismissedActivationOrderIdRef.current = promptOrderId;
+      assignPromptOpenRef.current = false;
       setAssignPrompt(false);
       setExtendDate('');
       await loadOrders();
@@ -784,7 +808,8 @@ export default function DashboardPage() {
   };
 
   const dismissAssignPrompt = () => {
-    datePromptDismissedRef.current = true;
+    dismissedActivationOrderIdRef.current = promptOrderId;
+    assignPromptOpenRef.current = false;
     setAssignPrompt(false);
     setPromptError('');
   };
@@ -983,6 +1008,11 @@ export default function DashboardPage() {
       const currentDataMb =
         getOptimisticDataMb() ?? dataMbFromAssignment(activeEsim) ?? 0;
 
+      const cartNonce =
+        typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+          ? crypto.randomUUID()
+          : `n_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+      sessionStorage.setItem('travela:cartNonce', cartNonce);
       localStorage.setItem(
         'cart',
         JSON.stringify({
@@ -994,6 +1024,8 @@ export default function DashboardPage() {
           user_esim_id: activeEsim.id,
           msisdn,
           current_data_mb: currentDataMb,
+          _cartCreatedAt: new Date().toISOString(),
+          _cartNonce: cartNonce,
         })
       );
       sessionStorage.setItem(CHECKOUT_TRANSITION_KEY, 'topup-modal');
@@ -1105,9 +1137,19 @@ export default function DashboardPage() {
 
           const status = parseAssignmentStatus(statusRes.body);
           const pendingPay = readPendingPaymentFromStorage();
+          // Refresh orders before deciding payment cleared. The ref is only
+          // assigned on render, so a fetch that just finished would otherwise
+          // still look unpaid and stop SIM provisioning.
+          const currentOrders =
+            pendingPay?.order_id ||
+            status.status === 'payment_required' ||
+            getBalancePollContext()
+              ? await loadOrders()
+              : ordersRef.current;
+          if (signal.cancelled) return;
           const pendingOrderPaid = Boolean(
             pendingPay?.order_id &&
-              ordersRef.current.some(
+              currentOrders.some(
                 (o) => String(o.id) === String(pendingPay.order_id) && isPaidOrder(o)
               )
           );
@@ -1115,7 +1157,7 @@ export default function DashboardPage() {
           const justPaid = Boolean(getBalancePollContext() || pendingOrderPaid);
           const isPhysicalPurchase =
             pendingPay?.simType === 'physical' ||
-            hasPhysicalSimPurchase(ordersRef.current, pendingPay, purchaseRef.current);
+            hasPhysicalSimPurchase(currentOrders, pendingPay, purchaseRef.current);
 
           if (isPhysicalPurchase && !status.has_sim) {
             setWaitingForSim(false);
@@ -1130,21 +1172,18 @@ export default function DashboardPage() {
           }
 
           if (status.status === 'awaiting_confirmation') {
-            const activationIso = status.activation_date ?? null;
-            setPromptActivationDate(activationIso);
-            setPromptOrderId(status.order_id ?? null);
-            if (activationIso) {
-              setExtendDate(activationIso.slice(0, 10));
-            }
-            if (!datePromptDismissedRef.current) {
-              setAssignPrompt(true);
-            }
+            showActivationPrompt(status.order_id ?? null, status.activation_date ?? null);
             setWaitingForSim(false);
             setAssignmentLoading(false);
             return;
           }
 
-          datePromptDismissedRef.current = false;
+          // Only forget a dismissal once this activation step is actually over.
+          // A different status in a later poll must not bring the prompt back.
+          if (status.has_sim || status.status === 'scheduled') {
+            dismissedActivationOrderIdRef.current = undefined;
+          }
+          assignPromptOpenRef.current = false;
           setAssignPrompt(false);
 
           if (status.status === 'scheduled') {
@@ -1228,7 +1267,7 @@ export default function DashboardPage() {
       signal.cancelled = true;
       if (signal.timeoutId) window.clearTimeout(signal.timeoutId);
     };
-  }, [isAuthenticated, applyAssignedSim, loadEsims, loadOrders]);
+  }, [isAuthenticated, applyAssignedSim, loadEsims, loadOrders, showActivationPrompt]);
 
   if (isLoading || !isAuthenticated) {
     return (
@@ -1544,6 +1583,8 @@ export default function DashboardPage() {
           </button>
         </div>
       </div>
+
+      <EmailVerificationBanner />
 
       {balancePolling ? (
         <div className="bg-emerald-50 border-b border-emerald-100 px-4 py-3">

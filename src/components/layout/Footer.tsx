@@ -18,8 +18,8 @@ export default function Footer() {
   const { isAuthenticated, isLoading } = useAuth();
   const pathname = usePathname();
 
-  // Immersive auth screens use a full-page split layout
-  if (pathname === '/auth/login') return null;
+  // Immersive / focused auth screens
+  if (pathname === '/auth/login' || pathname === '/auth/verify-email') return null;
 
   const accountLinks = [
     ...(!isLoading && !isAuthenticated

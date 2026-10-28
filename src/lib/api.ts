@@ -113,6 +113,15 @@ export function apiErrorMessage(body: unknown, fallback: string): string {
   return fallback;
 }
 
+/** User-facing text from a success body (`message` only), otherwise fallback. */
+export function apiResponseMessage(body: unknown, fallback: string): string {
+  if (body && typeof body === "object") {
+    const message = (body as { message?: unknown }).message;
+    if (typeof message === "string" && message.trim()) return message.trim();
+  }
+  return fallback;
+}
+
 /** First validation message per Laravel field key. */
 export function apiFieldErrors(body: unknown): Record<string, string> {
   if (!body || typeof body !== "object") return {};
@@ -313,6 +322,18 @@ export const AuthApi = {
   /** POST /auth/send-verification-email — body: { email } */
   sendVerificationEmail: async (data: { email: string }): Promise<ApiResult> => {
     const res = await authFetch(`${PUBLIC_API_BASE}/auth/send-verification-email`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    });
+    return toApiResult(res);
+  },
+  /**
+   * POST /auth/email/change — body: { email }
+   * Updates the account email and sends a new verification code (auth required).
+   */
+  changeEmail: async (data: { email: string }): Promise<ApiResult> => {
+    const res = await authFetch(`${PUBLIC_API_BASE}/auth/email/change`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(data),

@@ -23,7 +23,7 @@ import NationalitySelect from '@/components/checkout/NationalitySelect';
 import LegalAcceptance from '@/components/legal/LegalAcceptance';
 import { AuthApi, BundlesApi, extractAuthTokenFromBody, OrderApi } from '@/lib/api';
 import { type Bundle, type BundlesResponse, mapApiBundles } from '@/lib/bundles';
-import { AUTH_STORAGE_SYNC } from '@/lib/auth-context';
+import { AUTH_STORAGE_SYNC, useAuth } from '@/lib/auth-context';
 import {
   extractPaymentUrl,
   normalizePaymentUrl,
@@ -101,6 +101,14 @@ function apiErrorMessage(body: unknown, fallback: string): string {
   return fallback;
 }
 
+/** Success copy from an API body. Reads `message` only — not validation `errors`. */
+function apiResponseMessage(body: unknown, fallback: string): string {
+  if (!body || typeof body !== 'object') return fallback;
+  const message = (body as { message?: unknown }).message;
+  if (typeof message === 'string' && message.trim()) return message.trim();
+  return fallback;
+}
+
 const TOPUP_STEPS: { id: Step; label: string }[] = [
   { id: 'payment', label: 'Payment' },
 ];
@@ -146,6 +154,7 @@ function defaultActivationDates() {
 
 export default function CheckoutPage() {
   const router = useRouter();
+  const { markEmailVerified } = useAuth();
   const [cart, setCart] = useState<Cart | null>(null);
   const [step, setStep] = useState<Step>('register');
   const [isTopUpFlow, setIsTopUpFlow] = useState(false);
@@ -251,16 +260,14 @@ export default function CheckoutPage() {
           }
         }
 
-        // ── Security: reject carts whose nonce was tampered with ─────────
-        // The nonce is written to sessionStorage at bundle-selection time.
-        // If someone edits localStorage manually the nonce won't match.
+        // ── Security: cart nonce must match the tab that created it ────
+        // Both values are written together when the cart is created.
+        // A missing session nonce (cleared storage, new tab, restart) is
+        // rejected too — otherwise an edited localStorage cart would pass.
         const sessionNonce = sessionStorage.getItem('travela:cartNonce');
-        if (
-          parsed._cartNonce &&
-          sessionNonce &&
-          parsed._cartNonce !== sessionNonce
-        ) {
+        if (!parsed._cartNonce || !sessionNonce || parsed._cartNonce !== sessionNonce) {
           localStorage.removeItem('cart');
+          sessionStorage.removeItem('travela:cartNonce');
           router.push('/bundles?country=TZ&countryName=Tanzania');
           return;
         }
@@ -634,18 +641,7 @@ export default function CheckoutPage() {
 
       await createOrderForCheckout(userId);
 
-      try {
-        const raw = localStorage.getItem('user');
-        if (raw) {
-          const u = JSON.parse(raw) as Record<string, unknown>;
-          u.email_verified = true;
-          localStorage.setItem('user', JSON.stringify(u));
-          window.dispatchEvent(new Event(AUTH_STORAGE_SYNC));
-        }
-      } catch {
-        // ignore malformed stored user data
-      }
-
+      markEmailVerified();
       setStep('payment');
     } catch (e: unknown) {
       const fallback =
@@ -676,8 +672,10 @@ export default function CheckoutPage() {
         return;
       }
       setOtpInfo(
-        apiErrorMessage(res.body, 'Verification code sent to your email.')
+        apiResponseMessage(res.body, 'Verification code sent to your email.')
       );
+      setOtpAttempts(0);
+      setOtp('');
       setResendCooldownEndsAt(Date.now() + 30_000);
     } catch (e: unknown) {
       const fallback =
@@ -1336,7 +1334,6 @@ export default function CheckoutPage() {
                       ? `Resend code (${resendSecondsLeft}s)`
                       : 'Resend code'}
                 </button>
-                <span className="text-[11px] text-slate-400">Check spam/junk if you don’t see it.</span>
               </div>
             </div>
 
@@ -1351,19 +1348,42 @@ export default function CheckoutPage() {
                 ? <><Loader2 size={18} className="animate-spin" /> Verifying…</>
                 : <>Verify &amp; Continue to Payment <ArrowRight size={18} /></>}
             </button>
-            {otpAttempts >= OTP_MAX_ATTEMPTS && (
-              <p className="text-xs font-medium text-red-600 text-center mt-3">
-                Session locked. Please{' '}
-                <button
-                  type="button"
-                  className="underline font-bold"
-                  onClick={() => setStep('register')}
-                >
-                  go back
-                </button>{' '}
-                and start over.
+            <div className="mt-4 text-center space-y-2">
+              <p className="text-[11px] text-slate-400">
+                Check spam/junk if you don&apos;t see the email.
               </p>
-            )}
+              {otpAttempts >= OTP_MAX_ATTEMPTS ? (
+                <p className="text-xs font-medium text-red-600">
+                  Session locked.{' '}
+                  <button
+                    type="button"
+                    className="underline font-bold"
+                    onClick={() => void handleResendOtp()}
+                    disabled={resendingOtp || resendSecondsLeft > 0}
+                  >
+                    Resend a new code
+                  </button>
+                  {' or '}
+                  <Link
+                    href={`/auth/verify-email?redirect=${encodeURIComponent('/checkout')}`}
+                    className="underline font-bold"
+                  >
+                    open verification help
+                  </Link>
+                  .
+                </p>
+              ) : (
+                <p className="text-xs text-slate-500">
+                  Code not working?{' '}
+                  <Link
+                    href={`/auth/verify-email?redirect=${encodeURIComponent('/checkout')}`}
+                    className="font-bold text-slate-800 underline"
+                  >
+                    Verification help &amp; backup options
+                  </Link>
+                </p>
+              )}
+            </div>
           </div>
         )}
 
