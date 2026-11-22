@@ -14,6 +14,7 @@ import {
   mapApiBundles,
 } from '@/lib/bundles';
 import { dataMbFromAssignment } from '@/lib/esim-balance';
+import { hasNumberExpired } from '@/lib/plan-validity';
 
 type CheckoutMode = 'standard' | 'topup';
 
@@ -49,6 +50,7 @@ function BundlesContent() {
   const country = params.get('country') ?? 'TZ';
   const countryName = params.get('countryName') ?? 'Tanzania';
   const topupParam = params.get('topup');
+  const referralUnavailable = params.get('referral') === 'unavailable';
 
   const bundleIdParam = params.get('bundleId');
 
@@ -56,6 +58,7 @@ function BundlesContent() {
   const [loading, setLoading] = useState(true);
   const [selectedBundleId, setSelectedBundleId] = useState<string | number | null>(null);
   const [browseAllPlans, setBrowseAllPlans] = useState(false);
+  const [expiredNumberMessage, setExpiredNumberMessage] = useState('');
 
   const step2Ref = useRef<HTMLDivElement>(null);
 
@@ -94,6 +97,35 @@ function BundlesContent() {
     };
   }, [country, authLoading]);
 
+  useEffect(() => {
+    if (authLoading || topupParam !== '1') {
+      setExpiredNumberMessage('');
+      return;
+    }
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await EsimsApi.listMine();
+        if (!res.ok || cancelled) return;
+        const body = res.body as { data?: unknown[] } | unknown[];
+        const rows = Array.isArray(body) ? body : Array.isArray(body?.data) ? body.data : [];
+        const first = rows[0] as { plan_started_at?: string | null } | undefined;
+        if (!cancelled && first && hasNumberExpired(first.plan_started_at)) {
+          setExpiredNumberMessage(
+            'This number’s 30-day window from activation has ended, so it can’t be topped up. Choose a plan below to buy a new eSIM and a new number.'
+          );
+        }
+      } catch {
+        /* Checkout still explains the problem if the number can’t be topped up. */
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [authLoading, topupParam]);
+
   // Coming from a specific "Buy Now" click (e.g. landing page plan card) — skip re-choosing the bundle.
   useEffect(() => {
     if (!bundleIdParam || bundles.length === 0) return;
@@ -124,9 +156,8 @@ function BundlesContent() {
 
   const handleCheckout = async () => {
     if (!selectedBundle) return;
-    const isRegisteredCustomer = !!localStorage.getItem('token');
-    const checkoutMode: CheckoutMode =
-      topupParam === '1' || isRegisteredCustomer ? 'topup' : 'standard';
+    let checkoutMode: CheckoutMode =
+      topupParam === '1' && !expiredNumberMessage ? 'topup' : 'standard';
 
     let user_esim_id: number | undefined;
     let msisdn: string | undefined;
@@ -149,22 +180,30 @@ function BundlesContent() {
               : [];
         const first = rows[0] as {
           id?: number;
+          plan_started_at?: string | null;
           balances?: Record<string, unknown> | null;
           bundle?: { data_mb?: number | null };
           order_item?: { data_amount?: number | null };
           esim?: { msisdn?: string | null; phone_number?: string | null };
         } | undefined;
-        user_esim_id = first?.id;
-        msisdn =
-          first?.esim?.msisdn?.trim() ||
-          first?.esim?.phone_number?.trim() ||
-          undefined;
-        if (!user_esim_id || !msisdn) {
-          window.alert('No SIM found on your account. Complete your first purchase first.');
-          return;
+        if (hasNumberExpired(first?.plan_started_at)) {
+          checkoutMode = 'standard';
+          setExpiredNumberMessage(
+            'This number’s 30-day window from activation has ended, so it can’t be topped up. Choose a plan below to buy a new eSIM and a new number.'
+          );
+        } else {
+          user_esim_id = first?.id;
+          msisdn =
+            first?.esim?.msisdn?.trim() ||
+            first?.esim?.phone_number?.trim() ||
+            undefined;
+          if (!user_esim_id || !msisdn) {
+            window.alert('No SIM found on your account. Complete your first purchase first.');
+            return;
+          }
+          const liveDataMb = dataMbFromAssignment(first);
+          if (liveDataMb != null) current_data_mb = liveDataMb;
         }
-        const liveDataMb = dataMbFromAssignment(first);
-        if (liveDataMb != null) current_data_mb = liveDataMb;
       } catch {
         window.alert('Could not load your SIM. Try again from the dashboard.');
         return;
@@ -269,6 +308,21 @@ function BundlesContent() {
       </div>
 
       <div className="max-w-4xl mx-auto px-4 py-8">
+        {referralUnavailable && (
+          <div className="mb-6 rounded-2xl border border-amber-200 bg-amber-50 px-5 py-4">
+            <p className="text-sm font-extrabold text-slate-900">Partner link unavailable</p>
+            <p className="text-sm text-slate-600 mt-1 leading-relaxed">
+              That partner code is not active. You can still choose a plan, or enter a different
+              code at payment.
+            </p>
+          </div>
+        )}
+        {expiredNumberMessage && (
+          <div className="mb-6 rounded-2xl border border-amber-200 bg-amber-50 px-5 py-4">
+            <p className="text-sm font-extrabold text-slate-900">Buy a new eSIM</p>
+            <p className="text-sm text-slate-600 mt-1 leading-relaxed">{expiredNumberMessage}</p>
+          </div>
+        )}
         {/* eSIM compatibility reminder */}
         <div className="bg-white rounded-2xl border border-slate-200 p-5 mb-8">
           <div className="flex gap-3">

@@ -20,6 +20,8 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEffect, useLayoutEffect, useState } from 'react';
 import NationalitySelect from '@/components/checkout/NationalitySelect';
+import NewEsimNotice from '@/components/checkout/NewEsimNotice';
+import PartnerReferralField from '@/components/checkout/PartnerReferralField';
 import { PLAN_VALIDITY_DAYS, plannedExpiryDate, activationToday } from '@/lib/plan-validity';
 import LegalAcceptance from '@/components/legal/LegalAcceptance';
 import { AuthApi, BundlesApi, extractAuthTokenFromBody, OrderApi } from '@/lib/api';
@@ -31,6 +33,7 @@ import {
   resolvePaymentTargetUrl,
 } from '@/lib/payment';
 import { clearBalancePoll, startBalancePoll } from '@/lib/balance-poll';
+import { abandonUnpaidOrder } from '@/lib/unpaid-order';
 
 interface CartBundle {
   id: string | number;
@@ -164,6 +167,7 @@ export default function CheckoutPage() {
 
   // Payment
   const [paying, setPaying] = useState(false);
+  const [leavingCheckout, setLeavingCheckout] = useState(false);
   const [showPaymentRedirectDialog, setShowPaymentRedirectDialog] = useState(false);
   const [registeredUserId, setRegisteredUserId] = useState<number | null>(null);
   const [orderDraftId, setOrderDraftId] = useState<string>(() => `DRAFT-${new Date().getFullYear()}-${Date.now()}`);
@@ -856,6 +860,31 @@ export default function CheckoutPage() {
     };
   };
 
+  const bundlesHref = isTopUpFlow
+    ? '/bundles?country=TZ&countryName=Tanzania&topup=1'
+    : '/bundles?country=TZ&countryName=Tanzania';
+
+  /** Leave checkout and pick a different plan. Cancels an unpaid order if one was already created. */
+  const handleChangePlan = async () => {
+    if (leavingCheckout || paying) return;
+    setLeavingCheckout(true);
+    try {
+      const orderId = orderStoredSummary?.order_id;
+      if (orderId != null) await abandonUnpaidOrder(orderId);
+      localStorage.removeItem('cart');
+      try {
+        sessionStorage.removeItem('travela:cartNonce');
+        sessionStorage.removeItem('travela:showReceiptPrompt');
+        sessionStorage.removeItem('travela:receiptOrderId');
+      } catch {
+        /* ignore */
+      }
+      router.push(bundlesHref);
+    } finally {
+      setLeavingCheckout(false);
+    }
+  };
+
   /** Payment step — creates order if needed, then opens payment in a new tab and returns to dashboard. */
   const handleContinueToPaymentClick = async () => {
     const token =
@@ -1033,19 +1062,28 @@ export default function CheckoutPage() {
       {/* Back + steps — same width as the body cards */}
       <div className="bg-white border-b border-slate-100">
         <div className="max-w-3xl mx-auto px-4 pt-4 pb-5">
-          <button
-            onClick={() => {
-              if (step === 'register') router.push('/bundles?country=TZ&countryName=Tanzania');
-              else if (step === 'otp') setStep('register');
-              else if (step === 'payment') {
-                if (isTopUpFlow) router.push('/bundles?country=TZ&countryName=Tanzania&topup=1');
-                else setStep('otp');
-              }
-            }}
-            className="text-slate-400 hover:text-slate-700 transition-colors mb-4"
-          >
-            <ArrowLeft size={20} />
-          </button>
+          <div className="flex items-center justify-between gap-3 mb-4">
+            <button
+              type="button"
+              onClick={() => {
+                if (step === 'otp') setStep('register');
+                else void handleChangePlan();
+              }}
+              disabled={leavingCheckout || paying}
+              className="text-slate-400 hover:text-slate-700 transition-colors disabled:opacity-50"
+              aria-label={step === 'otp' ? 'Back to account details' : 'Back to plans'}
+            >
+              <ArrowLeft size={20} />
+            </button>
+            <button
+              type="button"
+              onClick={() => void handleChangePlan()}
+              disabled={leavingCheckout || paying}
+              className="text-xs font-bold text-slate-500 hover:text-slate-800 disabled:opacity-50"
+            >
+              {leavingCheckout ? 'Leaving…' : 'Change plan'}
+            </button>
+          </div>
           <div className="flex items-start w-full">
             {visibleSteps.map((s, i) => {
               const isFirst = i === 0;
@@ -1090,6 +1128,15 @@ export default function CheckoutPage() {
       </div>
 
       <div className="max-w-3xl mx-auto px-4 py-8">
+        {/* Referral is entered once on payment and kept in a cookie for the order. */}
+        {step === 'payment' && (
+          <>
+            {cart.simType === 'esim' && cart.checkoutMode !== 'topup' && !isTopUpFlow && (
+              <NewEsimNotice />
+            )}
+            <PartnerReferralField />
+          </>
+        )}
 
         {/* ── Security: bundle verification error ──────────────────────── */}
         {bundleVerifyError && (
@@ -1506,13 +1553,21 @@ export default function CheckoutPage() {
             <button
               type="button"
               onClick={() => setShowPaymentRedirectDialog(true)}
-              disabled={paying}
+              disabled={paying || leavingCheckout}
               className="w-full flex items-center justify-center gap-2 py-4 rounded-xl text-base font-bold text-white disabled:opacity-60 hover:opacity-90 transition-opacity"
               style={{ backgroundColor: '#112116' }}
             >
               {paying
                 ? <><Loader2 size={18} className="animate-spin" /> Opening payment…</>
                 : <>Continue to Payment <ArrowRight size={18} /></>}
+            </button>
+            <button
+              type="button"
+              onClick={() => void handleChangePlan()}
+              disabled={paying || leavingCheckout}
+              className="w-full mt-3 py-3 text-sm font-semibold text-slate-500 hover:text-slate-800 disabled:opacity-50"
+            >
+              {leavingCheckout ? 'Leaving this plan…' : 'Wrong plan? Change it'}
             </button>
           </div>
         )}

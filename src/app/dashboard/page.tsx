@@ -13,10 +13,17 @@ import {
 } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { getBalancePollContext } from '@/lib/balance-poll';
-import { PLAN_VALIDITY_DAYS, plannedExpiryDate, hasPlanExpired, activationToday } from '@/lib/plan-validity';
+import {
+  PLAN_VALIDITY_DAYS,
+  plannedExpiryDate,
+  hasNumberExpired,
+  numberExpiryDate,
+  activationToday,
+} from '@/lib/plan-validity';
 import { displayBundleName } from '@/lib/bundles';
 import { dataMbFromAssignment } from '@/lib/esim-balance';
 import { resolvePaymentTargetUrl, extractPaymentUrl, normalizePaymentUrl } from '@/lib/payment';
+import { abandonUnpaidOrder, readDismissedUnpaidOrderIds } from '@/lib/unpaid-order';
 import { useBalancePoll } from '@/hooks/useBalancePoll';
 import {
   CheckCircle,
@@ -40,6 +47,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 interface PurchaseData {
   items?: {
     bundle: {
+      id?: string | number;
+      sim_bundle_id?: number | null;
       name: string;
       data_mb?: number;
       validity_days?: number;
@@ -78,6 +87,8 @@ interface PendingPaymentData {
 
 interface OrderItemRecord {
   id: number;
+  bundle_id?: number | string | null;
+  sim_bundle_id?: number | null;
   bundle_name: string;
   data_amount: number | null;
   validity_days: number;
@@ -515,10 +526,15 @@ function isUnpaidPayableOrder(order: OrderRecord): boolean {
   return unpaid.has(status) || !status;
 }
 
-function findLatestUnpaidOrder(orders: OrderRecord[]): OrderRecord | null {
+function findLatestUnpaidOrder(
+  orders: OrderRecord[],
+  dismissedIds?: ReadonlySet<string>
+): OrderRecord | null {
   return (
     orders
-      .filter(isUnpaidPayableOrder)
+      .filter(
+        (order) => isUnpaidPayableOrder(order) && !dismissedIds?.has(String(order.id))
+      )
       .sort(
         (a, b) =>
           new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
@@ -526,13 +542,61 @@ function findLatestUnpaidOrder(orders: OrderRecord[]): OrderRecord | null {
   );
 }
 
+type PaymentAttention = 'pending' | 'failed' | 'cancelled' | 'expired';
+
+function paymentAttention(status?: string | null): PaymentAttention {
+  const s = (status ?? '').toLowerCase();
+  if (s.includes('fail') || s.includes('declin') || s.includes('error')) return 'failed';
+  if (s.includes('cancel')) return 'cancelled';
+  if (s.includes('expir')) return 'expired';
+  return 'pending';
+}
+
 function unpaidStatusLabel(status?: string | null) {
-  const s = (status ?? 'pending').toLowerCase();
-  if (s.includes('fail')) return 'Payment failed';
-  if (s.includes('cancel')) return 'Payment cancelled';
-  if (s.includes('expir')) return 'Payment expired';
+  const kind = paymentAttention(status);
+  if (kind === 'failed') return 'Payment failed';
+  if (kind === 'cancelled') return 'Payment cancelled';
+  if (kind === 'expired') return 'Payment expired';
   return 'Payment pending';
 }
+
+function paymentAttentionCopy(kind: PaymentAttention) {
+  switch (kind) {
+    case 'failed':
+      return {
+        title: 'Payment failed',
+        body: 'This payment didn’t go through. That can happen if the details were wrong or the payment was declined. Try again to open a new payment page, or cancel and choose a different plan.',
+        retryLabel: 'Try payment again',
+      };
+    case 'cancelled':
+      return {
+        title: 'Payment cancelled',
+        body: 'You cancelled this payment. Open a new payment page for this plan, or go back and choose a different bundle.',
+        retryLabel: 'Try payment again',
+      };
+    case 'expired':
+      return {
+        title: 'Payment expired',
+        body: 'This payment link has expired, so the previous page can’t be used. Start a new payment page, or choose a different plan.',
+        retryLabel: 'Start new payment',
+      };
+    default:
+      return {
+        title: 'Payment pending',
+        body: 'This order is waiting for payment. Continue to pay, or cancel it and choose a different plan.',
+        retryLabel: 'Continue payment',
+      };
+  }
+}
+
+function coerceEntityId(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && /^\d+$/.test(value)) return Number(value);
+  return null;
+}
+
+const NEW_ESIM_HREF = '/bundles?country=TZ&countryName=Tanzania';
+const TOPUP_BUNDLES_HREF = '/bundles?country=TZ&countryName=Tanzania&topup=1';
 
 function checkoutUrlFromOrder(order: OrderRecord | null | undefined): string | null {
   const payload = order?.payment_payload;
@@ -554,6 +618,108 @@ function checkoutUrlFromOrder(order: OrderRecord | null | undefined): string | n
     if (typeof value === 'string' && value.trim()) return value.trim();
   }
   return null;
+}
+
+function readBundleChoice(order: OrderRecord | null, pending: PendingPaymentData | null) {
+  const item = order?.order_items?.[0];
+  const pendingBundle = pending?.items?.[0]?.bundle;
+  const bundleId = coerceEntityId(item?.bundle_id) ?? coerceEntityId(pendingBundle?.id);
+  const simBundleId = item?.sim_bundle_id ?? pendingBundle?.sim_bundle_id ?? null;
+  return { bundleId, simBundleId, pendingBundle, item };
+}
+
+/** New order so a failed payment gets a payment page that is not the previous link. */
+async function createReplacementCheckout(input: {
+  userId: number;
+  order: OrderRecord | null;
+  pending: PendingPaymentData | null;
+  email: string;
+}): Promise<{ orderId: string | number; draftId: string; paymentUrl: string }> {
+  const { bundleId, simBundleId, pendingBundle, item } = readBundleChoice(input.order, input.pending);
+  if (bundleId == null) {
+    throw new Error('Could not start a new payment page. Cancel this payment and choose your plan again.');
+  }
+
+  const country = input.order?.metadata?.country ?? input.pending?.country ?? 'TZ';
+  const countryName =
+    input.order?.metadata?.countryName ??
+    input.order?.trip?.destination_country ??
+    input.pending?.countryName ??
+    input.pending?.trip?.countryName ??
+    'Tanzania';
+  const simType = input.order?.metadata?.simType ?? input.pending?.simType ?? 'esim';
+  const currency = input.order?.currency ?? input.pending?.currency ?? item?.currency ?? 'USD';
+  const price = Number(item?.price ?? input.pending?.total ?? input.order?.total_amount ?? 0);
+  const arrivalRaw = input.order?.trip?.arrival_date ?? input.pending?.trip?.arrivalDate;
+  const arrival =
+    arrivalRaw && arrivalRaw.slice(0, 10) >= activationToday()
+      ? arrivalRaw.slice(0, 10)
+      : activationToday();
+  const draftId = `DRAFT-${new Date().getFullYear()}-${Date.now()}`;
+  const amount = Number.isFinite(price) ? price : 0;
+
+  const orderRes = await OrderApi.create({
+    draft_id: draftId,
+    user_id: input.userId,
+    checkoutMode: 'standard',
+    country,
+    countryName,
+    simType,
+    trip: {
+      destination_country: country,
+      arrival_date: arrival,
+      departure_date: plannedExpiryDate(arrival),
+      duration_days: PLAN_VALIDITY_DAYS,
+    },
+    items: [
+      {
+        type: 'bundle',
+        bundle_id: bundleId,
+        sim_bundle_id: simBundleId,
+        bundle_name: item?.bundle_name ?? pendingBundle?.name ?? 'eSIM plan',
+        data_amount: item?.data_amount ?? pendingBundle?.data_mb ?? null,
+        validity_days: PLAN_VALIDITY_DAYS,
+        price: amount,
+        currency,
+      },
+    ],
+    pricing: {
+      subtotal: amount,
+      discount_amount: 0,
+      discount_code: null,
+      total_amount: amount,
+      currency,
+    },
+    kyc: {
+      passport_id: 'N/A',
+      passport_country: country.slice(0, 10),
+      nationality: 'Other',
+      gender: 'Other',
+      reason_for_travel: 'Tourism',
+    },
+    payment: { status: 'pending' },
+    order_metadata: {
+      source: 'web',
+      platform: 'web',
+      created_at: new Date().toISOString(),
+    },
+  });
+
+  if (!orderRes.ok) {
+    throw new Error(apiErrorMessage(orderRes.body, 'Could not start a new payment page. Try again.'));
+  }
+
+  const stored = orderRes.body as Record<string, unknown>;
+  const summary = (stored?.data ?? stored) as Record<string, unknown>;
+  const orderRecord = summary?.order as Record<string, unknown> | undefined;
+  const rawOrderId = orderRecord?.id ?? summary?.order_id ?? stored?.order_id ?? null;
+  const orderId =
+    typeof rawOrderId === 'number' || typeof rawOrderId === 'string' ? rawOrderId : null;
+  const paymentUrl = normalizePaymentUrl(extractPaymentUrl(orderRes.body));
+  if (orderId == null || !paymentUrl) {
+    throw new Error('Could not start a new payment page. Cancel this payment and choose your plan again.');
+  }
+  return { orderId, draftId, paymentUrl };
 }
 
 function formatOrderItemData(mb?: number | null) {
@@ -677,7 +843,12 @@ export default function DashboardPage() {
   const [showReceiptPrompt, setShowReceiptPrompt] = useState(false);
   const [receiptOrderId, setReceiptOrderId] = useState<string | null>(null);
   const [retryPaying, setRetryPaying] = useState(false);
+  const [abandoningPayment, setAbandoningPayment] = useState(false);
+  const [paymentNotice, setPaymentNotice] = useState('');
   const [retryPayError, setRetryPayError] = useState('');
+  const [dismissedOrderIds, setDismissedOrderIds] = useState<string[]>(() =>
+    readDismissedUnpaidOrderIds()
+  );
   const ordersRef = useRef(orders);
   const purchaseRef = useRef(purchase);
 
@@ -858,22 +1029,24 @@ export default function DashboardPage() {
     }
   };
 
-  const handleRetryPayment = useCallback(async () => {
+  const handleRetryPayment = useCallback(async (fresh: boolean) => {
     setRetryPayError('');
+    setPaymentNotice('');
     setRetryPaying(true);
     const paymentTab = window.open('about:blank', '_blank');
     if (paymentTab) paymentTab.opener = null;
     try {
       if (!paymentTab) throw new Error('Could not open the payment page. Allow pop-ups and try again.');
-      const unpaidOrder = findLatestUnpaidOrder(orders);
+      const dismissed = new Set(readDismissedUnpaidOrderIds());
+      const unpaidOrder = findLatestUnpaidOrder(orders, dismissed);
       const pending = pendingPayment ?? readPendingPaymentFromStorage();
 
-      const orderId = unpaidOrder?.id ?? pending?.order_id;
+      let orderId = unpaidOrder?.id ?? pending?.order_id;
       if (orderId == null) {
         throw new Error('No unpaid order found. Start checkout again from bundles.');
       }
 
-      const draftId = unpaidOrder?.draft_id ?? pending?.draft_id;
+      let draftId = unpaidOrder?.draft_id ?? pending?.draft_id;
       const amount = unpaidOrder
         ? Number(unpaidOrder.total_amount)
         : Number(pending?.total ?? 0);
@@ -892,13 +1065,52 @@ export default function DashboardPage() {
         'Tanzania';
       const simType =
         unpaidOrder?.metadata?.simType ?? pending?.simType ?? 'esim';
-
-      let paymentUrl = normalizePaymentUrl(checkoutUrlFromOrder(unpaidOrder)) ??
+      const previousUrl =
+        normalizePaymentUrl(checkoutUrlFromOrder(unpaidOrder)) ??
         (String(pending?.order_id) === String(orderId) ? normalizePaymentUrl(pending?.payment_url) : null);
-      if (!paymentUrl) {
-        const res = await OrderApi.evpayCheckoutUrl(orderId);
-        if (res.ok) paymentUrl = normalizePaymentUrl(extractPaymentUrl(res.body));
+
+      const res = await OrderApi.evpayCheckoutUrl(orderId, { regenerate: fresh });
+      let paymentUrl = res.ok ? normalizePaymentUrl(extractPaymentUrl(res.body)) : null;
+      const reusedOldLink = Boolean(fresh && paymentUrl && previousUrl && paymentUrl === previousUrl);
+      const isTopUpOrder = unpaidOrder?.metadata?.checkoutMode === 'topup';
+
+      if (fresh && (!paymentUrl || reusedOldLink)) {
+        if (isTopUpOrder) {
+          throw new Error(
+            res.ok
+              ? 'Could not open a new payment page for this top-up. Cancel it and choose a plan again.'
+              : apiErrorMessage(res.body, 'Could not open a new payment page. Try again.')
+          );
+        }
+        const userId = coerceEntityId(user?.id);
+        if (userId == null) {
+          throw new Error('Sign in again, then retry the payment.');
+        }
+        const previousOrderId = orderId;
+        const created = await createReplacementCheckout({
+          userId,
+          order: unpaidOrder,
+          pending,
+          email,
+        });
+        if (String(created.orderId) !== String(previousOrderId)) {
+          await abandonUnpaidOrder(previousOrderId);
+          setDismissedOrderIds(readDismissedUnpaidOrderIds());
+        }
+        orderId = created.orderId;
+        draftId = created.draftId;
+        paymentUrl = created.paymentUrl;
       }
+
+      if (!paymentUrl && !fresh) paymentUrl = previousUrl;
+      if (!paymentUrl) {
+        throw new Error(
+          fresh
+            ? 'Could not start a new payment page. Cancel this payment and choose your plan again.'
+            : apiErrorMessage(res.body, 'Could not open payment. Try again.')
+        );
+      }
+
       const targetUrl = resolvePaymentTargetUrl(paymentUrl, {
         amount: Number.isFinite(amount) ? amount : 0,
         currency,
@@ -910,7 +1122,6 @@ export default function DashboardPage() {
         draftId,
       });
 
-      // Keep pending snapshot so the dashboard can keep offering retry until paid.
       const snapshot = {
         order_id: orderId,
         draft_id: draftId,
@@ -919,6 +1130,8 @@ export default function DashboardPage() {
           pending?.items ??
           unpaidOrder?.order_items?.map((item) => ({
             bundle: {
+              id: item.bundle_id ?? undefined,
+              sim_bundle_id: item.sim_bundle_id,
               name: item.bundle_name,
               data_mb: item.data_amount ?? undefined,
               validity_days: item.validity_days,
@@ -962,7 +1175,50 @@ export default function DashboardPage() {
     } finally {
       setRetryPaying(false);
     }
-  }, [orders, pendingPayment, user?.email]);
+  }, [orders, pendingPayment, user?.email, user?.id]);
+
+  const abandonCurrentPayment = useCallback(async () => {
+    const dismissed = new Set(readDismissedUnpaidOrderIds());
+    const unpaidOrder = findLatestUnpaidOrder(orders, dismissed);
+    const pending = pendingPayment ?? readPendingPaymentFromStorage();
+    const orderId = unpaidOrder?.id ?? pending?.order_id;
+    if (orderId != null) await abandonUnpaidOrder(orderId);
+    else localStorage.removeItem('pendingPayment');
+    setDismissedOrderIds(readDismissedUnpaidOrderIds());
+    setPendingPayment(readPendingPaymentFromStorage());
+    setShowReceiptPrompt(false);
+    setReceiptOrderId(null);
+  }, [orders, pendingPayment]);
+
+  const handleCancelPayment = useCallback(async () => {
+    setRetryPayError('');
+    setAbandoningPayment(true);
+    try {
+      await abandonCurrentPayment();
+      setPaymentNotice('Payment cancelled. You can choose a bundle again whenever you’re ready.');
+    } catch (e: unknown) {
+      setRetryPayError(e instanceof Error ? e.message : 'Could not cancel this payment. Try again.');
+    } finally {
+      setAbandoningPayment(false);
+    }
+  }, [abandonCurrentPayment]);
+
+  const handleChangePlan = useCallback(async () => {
+    setRetryPayError('');
+    setAbandoningPayment(true);
+    try {
+      const dismissed = new Set(readDismissedUnpaidOrderIds());
+      const unpaidOrder = findLatestUnpaidOrder(orders, dismissed);
+      const topUpOrder = unpaidOrder?.metadata?.checkoutMode === 'topup';
+      const numberExpired = hasNumberExpired(userEsims[0]?.plan_started_at);
+      await abandonCurrentPayment();
+      router.push(topUpOrder && !numberExpired ? TOPUP_BUNDLES_HREF : NEW_ESIM_HREF);
+    } catch (e: unknown) {
+      setRetryPayError(e instanceof Error ? e.message : 'Could not leave this payment. Try again.');
+    } finally {
+      setAbandoningPayment(false);
+    }
+  }, [abandonCurrentPayment, orders, router, userEsims]);
 
   useEffect(() => {
     if (!topUpModalOpen) return;
@@ -1046,6 +1302,11 @@ export default function DashboardPage() {
 
       if (!activeEsim?.id || !msisdn) {
         window.alert('No SIM found on your account. Complete your first purchase first.');
+        return;
+      }
+
+      if (hasNumberExpired(activeEsim.plan_started_at)) {
+        closeTopUpModal(() => router.push(NEW_ESIM_HREF));
         return;
       }
 
@@ -1138,9 +1399,12 @@ export default function DashboardPage() {
   useEffect(() => {
     if (!isAuthenticated) return;
 
-    const refreshEsims = () => void loadEsims();
-    window.addEventListener('focus', refreshEsims);
-    window.addEventListener('pageshow', refreshEsims);
+    const refreshDashboard = () => {
+      void loadEsims();
+      void loadOrders();
+    };
+    window.addEventListener('focus', refreshDashboard);
+    window.addEventListener('pageshow', refreshDashboard);
     const refreshTimer = window.setInterval(() => {
       if (document.visibilityState === 'visible') {
         void loadEsims();
@@ -1149,8 +1413,8 @@ export default function DashboardPage() {
     }, 30_000);
 
     return () => {
-      window.removeEventListener('focus', refreshEsims);
-      window.removeEventListener('pageshow', refreshEsims);
+      window.removeEventListener('focus', refreshDashboard);
+      window.removeEventListener('pageshow', refreshDashboard);
       window.clearInterval(refreshTimer);
     };
   }, [isAuthenticated, loadEsims, loadOrders]);
@@ -1330,16 +1594,20 @@ export default function DashboardPage() {
         new Date(b.paid_at ?? b.created_at).getTime() -
         new Date(a.paid_at ?? a.created_at).getTime()
     )[0];
-  const latestUnpaidOrder = findLatestUnpaidOrder(orders);
+  const dismissedOrderSet = new Set(dismissedOrderIds);
+  const latestUnpaidOrder = findLatestUnpaidOrder(orders, dismissedOrderSet);
   const pendingOrderIsPaid = Boolean(
     pendingPayment?.order_id &&
       orders.some(
         (o) => String(o.id) === String(pendingPayment.order_id) && isPaidOrder(o)
       )
   );
+  const pendingDismissed =
+    pendingPayment?.order_id != null && dismissedOrderSet.has(String(pendingPayment.order_id));
   const pendingNeedsPayment = Boolean(
     pendingPayment &&
       !pendingOrderIsPaid &&
+      !pendingDismissed &&
       (pendingPayment.order_id == null ||
         !orders.some(
           (o) => String(o.id) === String(pendingPayment.order_id) && isPaidOrder(o)
@@ -1347,6 +1615,32 @@ export default function DashboardPage() {
   );
   const incompletePaymentOrder = latestUnpaidOrder;
   const needsPaymentRetry = Boolean(incompletePaymentOrder || pendingNeedsPayment);
+  const paymentKind = paymentAttention(
+    incompletePaymentOrder?.payment_status || incompletePaymentOrder?.status || null
+  );
+  const paymentCopy = paymentAttentionCopy(paymentKind);
+  const paymentBusy = retryPaying || abandoningPayment;
+  const paymentTone =
+    paymentKind === 'failed'
+      ? {
+          border: 'border-red-200',
+          header: 'rgba(254,226,226,0.85)',
+          badgeBg: 'rgba(153,27,27,0.1)',
+          badgeColor: '#991b1b',
+        }
+      : paymentKind === 'cancelled'
+        ? {
+            border: 'border-slate-200',
+            header: '#f8fafc',
+            badgeBg: 'rgba(51,65,85,0.08)',
+            badgeColor: '#334155',
+          }
+        : {
+            border: 'border-amber-200',
+            header: 'rgba(245,158,11,0.12)',
+            badgeBg: 'rgba(146,64,14,0.12)',
+            badgeColor: '#92400e',
+          };
   const incompletePaymentLabel = unpaidStatusLabel(
     incompletePaymentOrder?.payment_status || incompletePaymentOrder?.status || 'pending'
   );
@@ -1497,15 +1791,23 @@ export default function DashboardPage() {
     latestPaidOrder?.trip?.arrival_date ?? purchase?.trip?.arrivalDate ?? null;
   const planStartIso = primaryUserEsim?.plan_started_at ?? null;
   const confirmedExpiryIso = primaryUserEsim?.plan_expires_at ?? null;
-  const deactivationIso = confirmedExpiryIso ??
+  /** Number is valid for 30 days from activation; top-ups are allowed only inside that window. */
+  const numberExpiresIso = numberExpiryDate(planStartIso);
+  const deactivationIso =
+    numberExpiresIso ??
+    confirmedExpiryIso ??
     (scheduledActivationIso ? plannedExpiryDate(scheduledActivationIso.slice(0, 10)) : null);
-  const daysRemaining = confirmedExpiryIso ? daysUntil(confirmedExpiryIso) : null;
+  const daysRemaining = numberExpiresIso
+    ? daysUntil(numberExpiresIso)
+    : confirmedExpiryIso
+      ? daysUntil(confirmedExpiryIso)
+      : null;
   const daysRemainingLabel = daysLeftLabel(daysRemaining);
 
   const todayPart = activationToday();
   const activationDay = toDatePart(scheduledActivationIso);
-  /** Plan window ended — user cannot use this SIM anymore. */
-  const isPlanExpired = hasPlanExpired(confirmedExpiryIso);
+  /** Number window ended (30 days after activation) — top-up is closed; buy a new eSIM. */
+  const isNumberExpired = hasNumberExpired(planStartIso);
   /**
    * Purchased with a future activation date — number/activation details stay hidden
    * until that day; only purchase confirmation + receipt for now.
@@ -1513,7 +1815,7 @@ export default function DashboardPage() {
   const isReservedFuture = Boolean(
     hasPurchasedPlan &&
       !planStartIso &&
-      !isPlanExpired &&
+      !isNumberExpired &&
       activationDay &&
       todayPart &&
       activationDay > todayPart
@@ -1528,7 +1830,7 @@ export default function DashboardPage() {
           ? 'tomorrow'
           : `in ${daysUntilActivation} days`;
 
-  const planLifecycleLabel = isPlanExpired
+  const planLifecycleLabel = isNumberExpired
     ? 'Expired'
     : isReservedFuture
       ? 'Scheduled'
@@ -1571,7 +1873,7 @@ export default function DashboardPage() {
 
   return (
     <div className="min-h-screen" style={{ backgroundColor: '#f6f8f6' }}>
-      {assignPrompt && !isPlanExpired && (
+      {assignPrompt && !isNumberExpired && (
         <AssignSimPrompt
           activationDateLabel={formatTripDate(promptActivationDate)}
           currentActivationIso={promptActivationDate ? promptActivationDate.slice(0, 10) : null}
@@ -1598,14 +1900,24 @@ export default function DashboardPage() {
                 : 'Your eSIM Dashboard'}
             </h1>
           </div>
-          <button
-            type="button"
-            onClick={() => setTopUpModalOpen(true)}
-            className="flex-shrink-0 px-3 sm:px-4 py-2 sm:py-2.5 rounded-xl text-sm font-bold text-white hover:opacity-90 transition-opacity"
-            style={{ backgroundColor: '#112116' }}
-          >
-            Top Up
-          </button>
+          {isNumberExpired ? (
+            <Link
+              href={NEW_ESIM_HREF}
+              className="flex-shrink-0 px-3 sm:px-4 py-2 sm:py-2.5 rounded-xl text-sm font-bold text-white hover:opacity-90 transition-opacity"
+              style={{ backgroundColor: '#112116' }}
+            >
+              Buy new eSIM
+            </Link>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setTopUpModalOpen(true)}
+              className="flex-shrink-0 px-3 sm:px-4 py-2 sm:py-2.5 rounded-xl text-sm font-bold text-white hover:opacity-90 transition-opacity"
+              style={{ backgroundColor: '#112116' }}
+            >
+              Top Up
+            </button>
+          )}
         </div>
       </div>
 
@@ -1724,11 +2036,24 @@ export default function DashboardPage() {
           </div>
         )}
 
+        {paymentNotice && !needsPaymentRetry && (
+          <div className="rounded-2xl border border-slate-200 bg-white p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+            <p className="text-sm text-slate-700 leading-relaxed">{paymentNotice}</p>
+            <Link
+              href={NEW_ESIM_HREF}
+              className="inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl text-sm font-bold text-white hover:opacity-90"
+              style={{ backgroundColor: '#112116' }}
+            >
+              Choose a plan
+            </Link>
+          </div>
+        )}
+
         {needsPaymentRetry && (
-          <div className="rounded-2xl border border-amber-200 bg-white overflow-hidden shadow-sm">
+          <div className={`rounded-2xl border bg-white overflow-hidden shadow-sm ${paymentTone.border}`}>
             <div
               className="px-5 py-4 flex items-start justify-between gap-3"
-              style={{ backgroundColor: 'rgba(245,158,11,0.12)' }}
+              style={{ backgroundColor: paymentTone.header }}
             >
               <div className="flex items-start gap-3 min-w-0">
                 <div
@@ -1738,21 +2063,20 @@ export default function DashboardPage() {
                   <CreditCard size={18} />
                 </div>
                 <div className="min-w-0">
-                  <p className="text-sm font-extrabold text-slate-900">{incompletePaymentLabel}</p>
+                  <p className="text-sm font-extrabold text-slate-900">{paymentCopy.title}</p>
                   <p className="text-xs text-slate-600 mt-0.5 leading-relaxed">
-                    Your order was started but payment is not complete yet. Pay again for this order
-                    — once it clears, your number will appear here automatically.
+                    {paymentCopy.body}
                   </p>
                 </div>
               </div>
               <span
                 className="text-[11px] font-extrabold px-2.5 py-1 rounded-full flex-shrink-0"
-                style={{ backgroundColor: 'rgba(146,64,14,0.12)', color: '#92400e' }}
+                style={{ backgroundColor: paymentTone.badgeBg, color: paymentTone.badgeColor }}
               >
-                Unpaid
+                {incompletePaymentLabel}
               </span>
             </div>
-            <div className="px-5 py-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+            <div className="px-5 py-4 flex flex-col gap-4">
               <div className="min-w-0">
                 <p className="text-xs font-bold uppercase tracking-wide text-slate-400">Order</p>
                 <p className="text-sm font-extrabold text-slate-900 truncate">{incompleteBundleName}</p>
@@ -1768,11 +2092,11 @@ export default function DashboardPage() {
                   <p className="text-xs font-medium text-red-600 mt-2">{retryPayError}</p>
                 )}
               </div>
-              <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
+              <div className="flex flex-col sm:flex-row flex-wrap gap-2">
                 <button
                   type="button"
-                  onClick={() => void handleRetryPayment()}
-                  disabled={retryPaying}
+                  onClick={() => void handleRetryPayment(paymentKind !== 'pending')}
+                  disabled={paymentBusy}
                   className="inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl text-sm font-bold text-white hover:opacity-90 disabled:opacity-60"
                   style={{ backgroundColor: '#112116' }}
                 >
@@ -1782,14 +2106,33 @@ export default function DashboardPage() {
                     </>
                   ) : (
                     <>
-                      <CreditCard size={16} /> Complete payment
+                      <CreditCard size={16} /> {paymentCopy.retryLabel}
                     </>
                   )}
                 </button>
                 <button
                   type="button"
+                  onClick={() => void handleChangePlan()}
+                  disabled={paymentBusy}
+                  className="inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl text-sm font-bold border border-slate-200 text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                >
+                  {abandoningPayment ? 'Leaving…' : 'Change plan'}
+                </button>
+                {paymentKind !== 'cancelled' && (
+                  <button
+                    type="button"
+                    onClick={() => void handleCancelPayment()}
+                    disabled={paymentBusy}
+                    className="inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl text-sm font-bold text-slate-500 hover:text-slate-800 disabled:opacity-60"
+                  >
+                    Cancel payment
+                  </button>
+                )}
+                <button
+                  type="button"
                   onClick={() => void loadOrders()}
-                  className="inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl text-sm font-bold border border-slate-200 text-slate-700 hover:bg-slate-50"
+                  disabled={paymentBusy}
+                  className="inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl text-sm font-bold border border-slate-200 text-slate-700 hover:bg-slate-50 disabled:opacity-60"
                 >
                   Refresh status
                 </button>
@@ -2129,77 +2472,108 @@ export default function DashboardPage() {
                   </div>
                 </div>
               </div>
-            ) : isPlanExpired ? (
-              /* Expired — clear, non-usable state */
-              <div className="space-y-4">
-                <div className="sim-card-shape p-4 sm:p-6 pt-7 sm:pt-8 text-white opacity-95">
-                  <div className="flex items-start justify-between gap-3 mb-5 flex-wrap">
-                    <div className="flex items-start gap-3 min-w-0 flex-1">
-                      <div className="sim-chip mt-5 opacity-60" aria-hidden>
-                        <span /><span /><span /><span /><span /><span />
-                      </div>
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-2 mb-1">
-                          {isEsimType ? (
-                            <Wifi size={14} className="text-white/40" />
-                          ) : (
-                            <Smartphone size={14} className="text-white/40" />
-                          )}
-                          <p className="text-xs font-bold uppercase tracking-widest text-white/40">
-                            {simTypeTitle}
-                          </p>
-                        </div>
-                        {assignedMsisdn && (
-                          <h2 className="text-2xl sm:text-3xl font-black tracking-tight break-all leading-tight text-white/80">
-                            {formatMsisdn(assignedMsisdn)}
-                          </h2>
-                        )}
-                        <p className="text-base font-black text-white/80 mt-1">{esimTitle}</p>
-                        <p className="text-sm font-semibold mt-2 text-white/55">
-                          This plan has ended and can no longer be used.
-                        </p>
-                        {formatTripDate(deactivationIso) && (
-                          <p className="text-xs font-semibold mt-2 text-white/45">
-                            Ended {formatTripDate(deactivationIso)}
-                          </p>
-                        )}
-                      </div>
-                    </div>
-                    <span
-                      className="text-xs font-extrabold px-3 py-1.5 rounded-full flex-shrink-0"
-                      style={{ backgroundColor: 'rgba(248,113,113,0.25)', color: '#fecaca' }}
-                    >
+            ) : isNumberExpired ? (
+              needsPaymentRetry ? (
+                /* Buying a new eSIM — previous number is history only */
+                <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3.5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-[11px] font-bold uppercase tracking-widest text-slate-400">
+                      Previous number
+                    </p>
+                    <p className="text-sm font-extrabold text-slate-800 mt-0.5 truncate">
+                      {assignedMsisdn ? formatMsisdn(assignedMsisdn) : esimTitle}
+                      {assignedMsisdn && esimTitle ? (
+                        <span className="font-semibold text-slate-500"> · {esimTitle}</span>
+                      ) : null}
+                    </p>
+                    <p className="text-xs text-slate-500 mt-1">
                       Expired
-                    </span>
-                  </div>
-                </div>
-
-                <div className="bg-white rounded-2xl border border-slate-200 p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-                  <div>
-                    <p className="text-sm font-extrabold text-slate-900">Need data again?</p>
-                    <p className="text-sm text-slate-500 mt-1">
-                      Top up or buy a new plan to stay connected.
+                      {formatTripDate(deactivationIso)
+                        ? ` ${formatTripDate(deactivationIso)}`
+                        : ''}
+                      . Finish your new eSIM payment above to get a new number.
                     </p>
                   </div>
-                  <div className="flex flex-col sm:flex-row gap-2">
-                    <Link
-                      href={receiptHref}
-                      className="inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl text-sm font-bold border border-slate-200 text-slate-700 hover:bg-slate-50"
-                    >
-                      <Receipt size={16} />
-                      Receipt
-                    </Link>
-                    <button
-                      type="button"
-                      onClick={() => setTopUpModalOpen(true)}
-                      className="inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl text-sm font-bold text-white hover:opacity-90"
-                      style={{ backgroundColor: '#112116' }}
-                    >
-                      Top Up
-                    </button>
+                  <Link
+                    href={receiptHref}
+                    className="inline-flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-xs font-bold border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 flex-shrink-0"
+                  >
+                    <Receipt size={14} />
+                    Old receipt
+                  </Link>
+                </div>
+              ) : (
+                /* Number window ended — full prompt to buy a new eSIM */
+                <div className="space-y-4">
+                  <div className="sim-card-shape p-4 sm:p-6 pt-7 sm:pt-8 text-white opacity-95">
+                    <div className="flex items-start justify-between gap-3 mb-5 flex-wrap">
+                      <div className="flex items-start gap-3 min-w-0 flex-1">
+                        <div className="sim-chip mt-5 opacity-60" aria-hidden>
+                          <span /><span /><span /><span /><span /><span />
+                        </div>
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2 mb-1">
+                            {isEsimType ? (
+                              <Wifi size={14} className="text-white/40" />
+                            ) : (
+                              <Smartphone size={14} className="text-white/40" />
+                            )}
+                            <p className="text-xs font-bold uppercase tracking-widest text-white/40">
+                              {simTypeTitle}
+                            </p>
+                          </div>
+                          {assignedMsisdn && (
+                            <h2 className="text-2xl sm:text-3xl font-black tracking-tight break-all leading-tight text-white/80">
+                              {formatMsisdn(assignedMsisdn)}
+                            </h2>
+                          )}
+                          <p className="text-base font-black text-white/80 mt-1">{esimTitle}</p>
+                          <p className="text-sm font-semibold mt-2 text-white/55">
+                            This number’s 30-day window from activation has ended.
+                          </p>
+                          {formatTripDate(deactivationIso) && (
+                            <p className="text-xs font-semibold mt-2 text-white/45">
+                              Ended {formatTripDate(deactivationIso)}
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                      <span
+                        className="text-xs font-extrabold px-3 py-1.5 rounded-full flex-shrink-0"
+                        style={{ backgroundColor: 'rgba(248,113,113,0.25)', color: '#fecaca' }}
+                      >
+                        Expired
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="bg-white rounded-2xl border border-slate-200 p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                    <div>
+                      <p className="text-sm font-extrabold text-slate-900">This number has expired</p>
+                      <p className="text-sm text-slate-500 mt-1">
+                        After 30 days from activation, this number can’t be topped up. Buy a new eSIM to get a new number and a new plan.
+                      </p>
+                    </div>
+                    <div className="flex flex-col sm:flex-row gap-2">
+                      <Link
+                        href={receiptHref}
+                        className="inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl text-sm font-bold border border-slate-200 text-slate-700 hover:bg-slate-50"
+                      >
+                        <Receipt size={16} />
+                        Receipt
+                      </Link>
+                      <Link
+                        href={NEW_ESIM_HREF}
+                        className="inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl text-sm font-bold text-white hover:opacity-90"
+                        style={{ backgroundColor: '#112116' }}
+                      >
+                        <Smartphone size={16} />
+                        Buy a new eSIM
+                      </Link>
+                    </div>
                   </div>
                 </div>
-              </div>
+              )
             ) : (
               <>
             {/* Activation instructions — shown first so users know what the buttons below do */}

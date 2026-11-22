@@ -3,11 +3,23 @@
 import { useAuth } from '@/lib/auth-context';
 import { OrderApi } from '@/lib/api';
 import { downloadReceiptPdf } from '@/lib/receipt-pdf';
-import { ArrowRight, Download, Loader2, Receipt, RefreshCw, X } from 'lucide-react';
+import {
+  ArrowRight,
+  ChevronDown,
+  ChevronUp,
+  Download,
+  Eye,
+  Filter,
+  Loader2,
+  Receipt,
+  RefreshCw,
+  Search,
+  X,
+} from 'lucide-react';
 import Image from 'next/image';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
-import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 interface OrderItemBundle {
   name?: string;
@@ -151,24 +163,132 @@ function formatFullDateTime(iso?: string | null) {
   return `${datePart} at ${formatTime(iso)}`;
 }
 
-function bundleUpdatedAt(item: OrderItem, order: OrderRecord): string | null {
-  return item.updated_at ?? order.updated_at ?? order.paid_at ?? order.created_at ?? null;
+type StatusFilter = 'all' | 'paid' | 'pending' | 'failed' | 'cancelled' | 'expired' | 'other';
+type SortKey = 'date' | 'amount' | 'status';
+type SortDir = 'asc' | 'desc';
+
+function orderStatus(order: OrderRecord) {
+  return (order.payment_status || order.status || 'pending').toLowerCase();
+}
+
+function statusBucket(status: string): Exclude<StatusFilter, 'all'> {
+  const s = status.toLowerCase();
+  if (s === 'paid' || s === 'completed') return 'paid';
+  if (
+    s.includes('fail') ||
+    s.includes('declin') ||
+    s.includes('error')
+  ) {
+    return 'failed';
+  }
+  if (s.includes('cancel')) return 'cancelled';
+  if (s.includes('expir')) return 'expired';
+  if (
+    s.includes('pending') ||
+    s === 'unpaid' ||
+    s === 'awaiting_payment' ||
+    s === 'payment_required' ||
+    s === 'initiated' ||
+    s === 'created' ||
+    s === 'draft' ||
+    !s
+  ) {
+    return 'pending';
+  }
+  return 'other';
 }
 
 function statusLabel(status: string) {
+  const bucket = statusBucket(status);
+  if (bucket === 'paid') return 'Paid';
+  if (bucket === 'failed') return 'Failed';
+  if (bucket === 'cancelled') return 'Cancelled';
+  if (bucket === 'expired') return 'Expired';
+  if (bucket === 'pending') return 'Pending';
   return status.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-function statusStyles(status: string) {
-  const s = status.toLowerCase();
-  if (s === 'paid' || s === 'completed') {
-    return { backgroundColor: 'rgba(23,207,84,0.12)', color: '#112116' };
+function statusStyles(status: string): { backgroundColor: string; color: string; dot: string } {
+  const bucket = statusBucket(status);
+  if (bucket === 'paid') {
+    return {
+      backgroundColor: 'rgba(23,207,84,0.14)',
+      color: '#14532d',
+      dot: '#17cf54',
+    };
   }
-  if (s === 'pending' || s === 'pending_payment') {
-    return { backgroundColor: 'rgba(245,158,11,0.12)', color: '#92400e' };
+  if (bucket === 'failed') {
+    return {
+      backgroundColor: 'rgba(239,68,68,0.12)',
+      color: '#991b1b',
+      dot: '#ef4444',
+    };
   }
-  return { backgroundColor: 'rgba(148,163,184,0.15)', color: '#475569' };
+  if (bucket === 'cancelled') {
+    return {
+      backgroundColor: 'rgba(100,116,139,0.14)',
+      color: '#334155',
+      dot: '#64748b',
+    };
+  }
+  if (bucket === 'expired') {
+    return {
+      backgroundColor: 'rgba(245,158,11,0.14)',
+      color: '#92400e',
+      dot: '#f59e0b',
+    };
+  }
+  if (bucket === 'pending') {
+    return {
+      backgroundColor: 'rgba(59,130,246,0.12)',
+      color: '#1e40af',
+      dot: '#3b82f6',
+    };
+  }
+  return {
+    backgroundColor: 'rgba(148,163,184,0.15)',
+    color: '#475569',
+    dot: '#94a3b8',
+  };
 }
+
+function StatusBadge({ status }: { status: string }) {
+  const styles = statusStyles(status);
+  return (
+    <span
+      className="inline-flex items-center gap-1.5 text-[11px] font-bold px-2.5 py-1 rounded-full whitespace-nowrap"
+      style={{ backgroundColor: styles.backgroundColor, color: styles.color }}
+    >
+      <span
+        className="w-1.5 h-1.5 rounded-full flex-shrink-0"
+        style={{ backgroundColor: styles.dot }}
+        aria-hidden
+      />
+      {statusLabel(status)}
+    </span>
+  );
+}
+
+function orderPlanLabel(order: OrderRecord) {
+  const item = order.order_items?.[0];
+  if (!item) return '—';
+  const data = formatItemData(item);
+  const name = item.bundle_name || item.bundle?.name || 'Plan';
+  return data !== '—' ? `${name} · ${data}` : name;
+}
+
+function orderDateIso(order: OrderRecord) {
+  return order.updated_at ?? order.paid_at ?? order.created_at;
+}
+
+const STATUS_FILTERS: { id: StatusFilter; label: string }[] = [
+  { id: 'all', label: 'All' },
+  { id: 'paid', label: 'Paid' },
+  { id: 'pending', label: 'Pending' },
+  { id: 'failed', label: 'Failed' },
+  { id: 'cancelled', label: 'Cancelled' },
+  { id: 'expired', label: 'Expired' },
+];
 
 function parseOrdersFromBody(body: unknown): OrderRecord[] {
   if (!body || typeof body !== 'object') return [];
@@ -247,12 +367,9 @@ function ReceiptModal({ order, onClose }: { order: OrderRecord; onClose: () => v
             className="h-8 w-auto object-contain mx-auto mb-3"
           />
           <h2 className="text-xl font-extrabold text-slate-900">Receipt</h2>
-          <span
-            className="inline-block mt-2 text-xs font-bold px-2.5 py-1 rounded-full"
-            style={statusStyles(order.payment_status || order.status)}
-          >
-            {isPaid ? 'Paid' : statusLabel(order.payment_status || order.status)}
-          </span>
+          <div className="mt-2 flex justify-center">
+            <StatusBadge status={isPaid ? 'paid' : order.payment_status || order.status} />
+          </div>
           <p className="text-xs text-slate-400 mt-2">
             {formatFullDateTime(order.paid_at ?? order.created_at)}
           </p>
@@ -366,6 +483,10 @@ function ReceiptsContent() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [selectedOrder, setSelectedOrder] = useState<OrderRecord | null>(null);
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
+  const [query, setQuery] = useState('');
+  const [sortKey, setSortKey] = useState<SortKey>('date');
+  const [sortDir, setSortDir] = useState<SortDir>('desc');
   const autoOpenedOrderId = useRef<string | null>(null);
 
   const loadOrders = useCallback(async () => {
@@ -405,18 +526,94 @@ function ReceiptsContent() {
     void loadOrders();
   }, [isAuthenticated, authLoading, loadOrders]);
 
-  // Deep-link from dashboard: open the matching paid receipt once (don't reopen after close)
   useEffect(() => {
     if (!orderIdParam || orders.length === 0) return;
     if (autoOpenedOrderId.current === orderIdParam) return;
     const match = orders.find((o) => String(o.id) === String(orderIdParam));
     if (!match) return;
-    const status = (match.payment_status || match.status || '').toLowerCase();
-    if (status === 'paid' || status === 'completed') {
+    if (statusBucket(orderStatus(match)) === 'paid') {
       autoOpenedOrderId.current = orderIdParam;
       setSelectedOrder(match);
     }
   }, [orderIdParam, orders]);
+
+  const statusCounts = useMemo(() => {
+    const counts: Record<StatusFilter, number> = {
+      all: orders.length,
+      paid: 0,
+      pending: 0,
+      failed: 0,
+      cancelled: 0,
+      expired: 0,
+      other: 0,
+    };
+    for (const order of orders) {
+      counts[statusBucket(orderStatus(order))] += 1;
+    }
+    return counts;
+  }, [orders]);
+
+  const visibleFilters = useMemo(
+    () =>
+      STATUS_FILTERS.filter(
+        (filter) => filter.id === 'all' || statusCounts[filter.id] > 0
+      ),
+    [statusCounts]
+  );
+
+  const filteredOrders = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    const list = orders.filter((order) => {
+      const status = orderStatus(order);
+      if (statusFilter !== 'all' && statusBucket(status) !== statusFilter) return false;
+      if (!needle) return true;
+      const haystack = [
+        String(order.id),
+        order.draft_id,
+        order.payment_reference,
+        order.gateway_payment_id,
+        order.metadata?.countryName,
+        order.trip?.destination_country,
+        order.metadata?.simType,
+        orderPlanLabel(order),
+        statusLabel(status),
+        ...(order.order_items ?? []).map(
+          (item) => `${item.bundle_name ?? ''} ${item.bundle?.name ?? ''}`
+        ),
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+      return haystack.includes(needle);
+    });
+
+    const dir = sortDir === 'asc' ? 1 : -1;
+    return [...list].sort((a, b) => {
+      if (sortKey === 'amount') {
+        return (Number(a.total_amount) - Number(b.total_amount)) * dir;
+      }
+      if (sortKey === 'status') {
+        return statusLabel(orderStatus(a)).localeCompare(statusLabel(orderStatus(b))) * dir;
+      }
+      return (
+        (Date.parse(orderDateIso(a) ?? '') - Date.parse(orderDateIso(b) ?? '')) * dir
+      );
+    });
+  }, [orders, query, sortDir, sortKey, statusFilter]);
+
+  const toggleSort = (key: SortKey) => {
+    if (sortKey === key) {
+      setSortDir((prev) => (prev === 'asc' ? 'desc' : 'asc'));
+      return;
+    }
+    setSortKey(key);
+    setSortDir(key === 'date' ? 'desc' : 'asc');
+  };
+
+  const SortIcon = ({ column }: { column: SortKey }) => {
+    if (sortKey !== column) return null;
+    return sortDir === 'asc' ? <ChevronUp size={14} /> : <ChevronDown size={14} />;
+  };
 
   if (authLoading) {
     return (
@@ -454,28 +651,40 @@ function ReceiptsContent() {
   return (
     <div className="min-h-screen" style={{ backgroundColor: '#f6f8f6' }}>
       <div className="bg-white border-b border-slate-100 px-4 py-5">
-        <div className="max-w-2xl mx-auto flex items-center justify-between gap-4">
+        <div className="max-w-6xl mx-auto flex items-center justify-between gap-4">
           <div>
-            <p className="text-xs font-bold uppercase tracking-widest text-slate-400 mb-0.5">Travela</p>
+            <p className="text-xs font-bold uppercase tracking-widest text-slate-400 mb-0.5">
+              Travela
+            </p>
             <h1 className="text-xl font-extrabold text-slate-900">Transaction History</h1>
+            <p className="text-sm text-slate-500 mt-1">
+              Filter and review every purchase, payment, and receipt.
+            </p>
           </div>
-          <Link
-            href="/bundles?country=TZ&countryName=Tanzania&topup=1"
-            className="flex-shrink-0 inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-bold border-2 transition-colors hover:bg-slate-50"
-            style={{
-              backgroundColor: 'rgba(23,207,84,0.08)',
-              borderColor: 'rgba(23,207,84,0.3)',
-              color: '#112116',
-            }}
-          >
-            <RefreshCw size={16} />
-            Top up
-          </Link>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <button
+              type="button"
+              onClick={() => void loadOrders()}
+              disabled={loading}
+              className="inline-flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl text-sm font-bold border border-slate-200 text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+              aria-label="Refresh transactions"
+            >
+              <RefreshCw size={16} className={loading ? 'animate-spin' : undefined} />
+              <span className="hidden sm:inline">Refresh</span>
+            </button>
+            <Link
+              href="/bundles?country=TZ&countryName=Tanzania"
+              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-bold text-white hover:opacity-90"
+              style={{ backgroundColor: '#112116' }}
+            >
+              Buy eSIM
+            </Link>
+          </div>
         </div>
       </div>
 
-      <div className="max-w-2xl mx-auto px-4 py-8">
-        {loading ? (
+      <div className="max-w-6xl mx-auto px-4 py-8 space-y-4">
+        {loading && orders.length === 0 ? (
           <div className="flex justify-center py-16">
             <Loader2 size={28} className="animate-spin text-slate-400" />
           </div>
@@ -496,7 +705,7 @@ function ReceiptsContent() {
             <Receipt size={36} className="mx-auto mb-4 text-slate-200" />
             <p className="text-sm font-semibold text-slate-500">No transactions yet.</p>
             <p className="text-xs text-slate-400 mt-1 mb-5">
-              Your completed purchases will appear here as transaction history.
+              Your purchases will appear here once you buy an eSIM.
             </p>
             <Link
               href="/bundles?country=TZ&countryName=Tanzania"
@@ -507,101 +716,264 @@ function ReceiptsContent() {
             </Link>
           </div>
         ) : (
-          <div className="space-y-4">
-            {orders.map((order) => {
-              const displayStatus = order.payment_status || order.status;
-              const countryName = order.metadata?.countryName ?? order.trip?.destination_country;
-              const simType = order.metadata?.simType;
-              const items = order.order_items ?? [];
-
-              return (
-                <div key={order.id} className="bg-white rounded-2xl border border-slate-100 p-5">
-                  <div className="flex items-start justify-between gap-3 mb-3">
-                    <div className="min-w-0">
-                      <p className="text-xs text-slate-400">
-                        {order.updated_at ? 'Updated' : order.paid_at ? 'Paid' : 'Ordered'}{' '}
-                        {formatDateTime(order.updated_at ?? order.paid_at ?? order.created_at)}
-                      </p>
-                      {countryName && (
-                        <p className="text-sm font-bold text-slate-800">{countryName}</p>
-                      )}
-                      {order.payment_reference && (
-                        <p className="text-xs text-slate-500 mt-0.5 truncate">
-                          Ref: {order.payment_reference}
-                        </p>
-                      )}
-                      {(simType || order.draft_id) && (
-                        <p className="text-xs text-slate-400 mt-1">
-                          {simType === 'esim' ? 'eSIM' : simType === 'physical' ? 'Physical SIM' : null}
-                          {simType && order.draft_id ? ' · ' : null}
-                          {order.draft_id ? `Draft ${order.draft_id}` : null}
-                        </p>
-                      )}
-                    </div>
-                    <span
-                      className="text-xs font-bold px-2.5 py-1 rounded-full flex-shrink-0 capitalize"
-                      style={statusStyles(displayStatus)}
-                    >
-                      {statusLabel(displayStatus)}
-                    </span>
-                  </div>
-
-                  {items.length === 0 ? (
-                    <p className="text-sm text-slate-500 border-t border-slate-50 pt-3">
-                      No line items on this order.
-                    </p>
-                  ) : (
-                    items.map((item) => (
-                      <div
-                        key={item.id}
-                        className="flex items-center justify-between py-2 border-t border-slate-50 gap-3"
-                      >
-                        <div className="text-sm text-slate-700 min-w-0">
-                          <p>
-                            <span className="font-bold text-slate-900">{formatItemData(item)}</span>
-                            {' · '}
-                            {item.bundle_name || item.bundle?.name || 'Bundle'}
-                            {item.validity_days ? ` · ${item.validity_days} days` : ''}
-                          </p>
-                          <p className="text-xs text-slate-400 mt-0.5">
-                            Bundle updated {formatDateTime(bundleUpdatedAt(item, order))}
-                          </p>
-                        </div>
-                        <p className="text-sm font-semibold text-slate-800 flex-shrink-0">
-                          {item.currency ?? order.currency}{' '}
-                          {Number(item.price).toFixed(2)}
-                        </p>
-                      </div>
-                    ))
-                  )}
-
-                  <div className="flex items-center justify-between pt-3 mt-1 border-t border-slate-100">
-                    <p className="text-sm font-bold text-slate-700">Total</p>
-                    <p className="text-base font-extrabold" style={{ color: '#112116' }}>
-                      {order.currency} {Number(order.total_amount).toFixed(2)}
-                    </p>
-                  </div>
-
-                  {(displayStatus.toLowerCase() === 'paid' ||
-                    displayStatus.toLowerCase() === 'completed') && (
-                    <button
-                      type="button"
-                      onClick={() => setSelectedOrder(order)}
-                      className="mt-3 w-full inline-flex items-center justify-center gap-2 py-2.5 rounded-xl text-xs font-bold border-2 transition-colors hover:bg-slate-50"
-                      style={{
-                        backgroundColor: 'rgba(23,207,84,0.08)',
-                        borderColor: 'rgba(23,207,84,0.3)',
-                        color: '#112116',
-                      }}
-                    >
-                      <Receipt size={14} />
-                      View Receipt
-                    </button>
-                  )}
+          <>
+            <div className="bg-white rounded-2xl border border-slate-200 p-4 sm:p-5 space-y-4 shadow-sm">
+              <div className="flex flex-col lg:flex-row lg:items-center gap-3">
+                <div className="relative flex-1">
+                  <Search
+                    size={16}
+                    className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none"
+                  />
+                  <input
+                    type="search"
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                    placeholder="Search by plan, order, reference, or country…"
+                    className="w-full pl-10 pr-4 py-3 rounded-xl border border-slate-200 text-sm text-slate-800 placeholder:text-slate-400 focus:outline-none focus:border-slate-400"
+                  />
                 </div>
-              );
-            })}
-          </div>
+                <p className="text-xs font-semibold text-slate-500 lg:text-right flex items-center gap-1.5">
+                  <Filter size={13} />
+                  {filteredOrders.length} of {orders.length} shown
+                </p>
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+                {visibleFilters.map((filter) => {
+                  const active = statusFilter === filter.id;
+                  const count = statusCounts[filter.id];
+                  const sampleStyle =
+                    filter.id === 'all'
+                      ? { backgroundColor: 'rgba(17,33,22,0.08)', color: '#112116', dot: '#112116' }
+                      : statusStyles(filter.id);
+                  return (
+                    <button
+                      key={filter.id}
+                      type="button"
+                      onClick={() => setStatusFilter(filter.id)}
+                      className={`inline-flex items-center gap-2 px-3 py-2 rounded-full text-xs font-bold border transition-colors ${
+                        active
+                          ? 'border-transparent text-white'
+                          : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+                      }`}
+                      style={
+                        active
+                          ? { backgroundColor: '#112116' }
+                          : undefined
+                      }
+                    >
+                      {filter.id !== 'all' && (
+                        <span
+                          className="w-1.5 h-1.5 rounded-full"
+                          style={{ backgroundColor: active ? '#17cf54' : sampleStyle.dot }}
+                          aria-hidden
+                        />
+                      )}
+                      {filter.label}
+                      <span
+                        className={`min-w-5 text-center rounded-full px-1.5 py-0.5 text-[10px] ${
+                          active ? 'bg-white/15 text-white' : 'bg-slate-100 text-slate-500'
+                        }`}
+                      >
+                        {count}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {filteredOrders.length === 0 ? (
+              <div className="bg-white rounded-2xl border border-slate-200 p-10 text-center">
+                <p className="text-sm font-semibold text-slate-600">No matching transactions</p>
+                <p className="text-xs text-slate-400 mt-1 mb-4">
+                  Try another status filter or clear your search.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setStatusFilter('all');
+                    setQuery('');
+                  }}
+                  className="text-sm font-bold underline"
+                  style={{ color: '#112116' }}
+                >
+                  Clear filters
+                </button>
+              </div>
+            ) : (
+              <>
+                {/* Desktop table */}
+                <div className="hidden md:block bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm">
+                  <div className="overflow-x-auto">
+                    <table className="w-full min-w-[720px] text-left">
+                      <thead>
+                        <tr className="border-b border-slate-100 bg-slate-50/80">
+                          <th className="px-5 py-3.5">
+                            <button
+                              type="button"
+                              onClick={() => toggleSort('date')}
+                              className="inline-flex items-center gap-1 text-[11px] font-bold uppercase tracking-wide text-slate-500 hover:text-slate-800"
+                            >
+                              Date <SortIcon column="date" />
+                            </button>
+                          </th>
+                          <th className="px-5 py-3.5 text-[11px] font-bold uppercase tracking-wide text-slate-500">
+                            Plan
+                          </th>
+                          <th className="px-5 py-3.5 text-[11px] font-bold uppercase tracking-wide text-slate-500">
+                            Reference
+                          </th>
+                          <th className="px-5 py-3.5">
+                            <button
+                              type="button"
+                              onClick={() => toggleSort('status')}
+                              className="inline-flex items-center gap-1 text-[11px] font-bold uppercase tracking-wide text-slate-500 hover:text-slate-800"
+                            >
+                              Status <SortIcon column="status" />
+                            </button>
+                          </th>
+                          <th className="px-5 py-3.5">
+                            <button
+                              type="button"
+                              onClick={() => toggleSort('amount')}
+                              className="inline-flex items-center gap-1 text-[11px] font-bold uppercase tracking-wide text-slate-500 hover:text-slate-800"
+                            >
+                              Amount <SortIcon column="amount" />
+                            </button>
+                          </th>
+                          <th className="px-5 py-3.5 text-[11px] font-bold uppercase tracking-wide text-slate-500 text-right">
+                            Action
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {filteredOrders.map((order) => {
+                          const status = orderStatus(order);
+                          const paid = statusBucket(status) === 'paid';
+                          const countryName =
+                            order.metadata?.countryName ?? order.trip?.destination_country;
+                          const simType = order.metadata?.simType;
+                          return (
+                            <tr
+                              key={order.id}
+                              className="border-b border-slate-100 last:border-b-0 hover:bg-slate-50/70 transition-colors"
+                            >
+                              <td className="px-5 py-4 align-middle">
+                                <p className="text-sm font-semibold text-slate-900">
+                                  {formatDateTime(orderDateIso(order))}
+                                </p>
+                                <p className="text-xs text-slate-400 mt-0.5">Order #{order.id}</p>
+                              </td>
+                              <td className="px-5 py-4 align-middle min-w-0">
+                                <p className="text-sm font-bold text-slate-900 truncate">
+                                  {orderPlanLabel(order)}
+                                </p>
+                                <p className="text-xs text-slate-500 mt-0.5 truncate">
+                                  {[
+                                    countryName,
+                                    simType === 'esim'
+                                      ? 'eSIM'
+                                      : simType === 'physical'
+                                        ? 'Physical SIM'
+                                        : null,
+                                  ]
+                                    .filter(Boolean)
+                                    .join(' · ') || '—'}
+                                </p>
+                              </td>
+                              <td className="px-5 py-4 align-middle">
+                                <p className="text-sm font-medium text-slate-700 truncate max-w-[12rem]">
+                                  {order.payment_reference || order.draft_id || '—'}
+                                </p>
+                              </td>
+                              <td className="px-5 py-4 align-middle">
+                                <StatusBadge status={status} />
+                              </td>
+                              <td className="px-5 py-4 align-middle">
+                                <p className="text-sm font-extrabold text-slate-900">
+                                  {order.currency} {Number(order.total_amount).toFixed(2)}
+                                </p>
+                              </td>
+                              <td className="px-5 py-4 align-middle text-right">
+                                {paid ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => setSelectedOrder(order)}
+                                    className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-bold border border-slate-200 text-slate-700 hover:bg-white"
+                                  >
+                                    <Eye size={14} />
+                                    Receipt
+                                  </button>
+                                ) : (
+                                  <span className="text-xs text-slate-400">—</span>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                {/* Mobile cards */}
+                <div className="md:hidden space-y-3">
+                  {filteredOrders.map((order) => {
+                    const status = orderStatus(order);
+                    const paid = statusBucket(status) === 'paid';
+                    const countryName =
+                      order.metadata?.countryName ?? order.trip?.destination_country;
+                    return (
+                      <div
+                        key={order.id}
+                        className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm"
+                      >
+                        <div className="flex items-start justify-between gap-3 mb-3">
+                          <div className="min-w-0">
+                            <p className="text-xs text-slate-400">
+                              {formatDateTime(orderDateIso(order))}
+                            </p>
+                            <p className="text-sm font-extrabold text-slate-900 mt-0.5 truncate">
+                              {orderPlanLabel(order)}
+                            </p>
+                            {countryName && (
+                              <p className="text-xs text-slate-500 mt-0.5">{countryName}</p>
+                            )}
+                          </div>
+                          <StatusBadge status={status} />
+                        </div>
+                        <div className="flex items-center justify-between gap-3 pt-3 border-t border-slate-100">
+                          <div>
+                            <p className="text-[11px] font-bold uppercase tracking-wide text-slate-400">
+                              Total
+                            </p>
+                            <p className="text-sm font-extrabold text-slate-900">
+                              {order.currency} {Number(order.total_amount).toFixed(2)}
+                            </p>
+                          </div>
+                          {paid ? (
+                            <button
+                              type="button"
+                              onClick={() => setSelectedOrder(order)}
+                              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-bold border border-slate-200 text-slate-700"
+                            >
+                              <Eye size={14} />
+                              Receipt
+                            </button>
+                          ) : (
+                            <p className="text-xs text-slate-400 truncate max-w-[40%]">
+                              {order.payment_reference || order.draft_id || `Order #${order.id}`}
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </>
+            )}
+          </>
         )}
       </div>
 

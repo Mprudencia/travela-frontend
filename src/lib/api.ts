@@ -4,6 +4,8 @@
  * Override with NEXT_PUBLIC_BASE_URL (no trailing slash) if needed.
  */
 
+import { waitForReferralChange } from './referral-client';
+
 const PUBLIC_API_BASE =
   process.env.NEXT_PUBLIC_BASE_URL?.replace(/\/+$/, "") ??
   process.env.NEXT_PUBLIC_API_URL?.replace(/\/+$/, "") ??
@@ -327,9 +329,31 @@ export const OrderApi = {
     const res = await authFetch(`${PUBLIC_API_BASE}/me/orders`);
     return toApiResult(res);
   },
-  /** POST /orders/{orderId}/evpay-checkout-url — reuse or create the EvMak checkout link */
-  evpayCheckoutUrl: async (orderId: string | number): Promise<ApiResult> => {
-    const res = await authFetch(`${PUBLIC_API_BASE}/orders/${orderId}/evpay-checkout-url`, {
+  /**
+   * POST /orders/{orderId}/evpay-checkout-url
+   * Pass regenerate to ask for a new payment page. A failed, cancelled, or expired
+   * attempt must not reopen the previous link.
+   */
+  evpayCheckoutUrl: async (
+    orderId: string | number,
+    options?: { regenerate?: boolean }
+  ): Promise<ApiResult> => {
+    const request = (regenerate: boolean) =>
+      authFetch(`${PUBLIC_API_BASE}/orders/${orderId}/evpay-checkout-url`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(regenerate ? { regenerate: true } : {}),
+      }).then(toApiResult);
+
+    const res = await request(Boolean(options?.regenerate));
+    if (options?.regenerate && !res.ok && (res.status === 400 || res.status === 422)) {
+      return request(false);
+    }
+    return res;
+  },
+  /** POST /orders/{orderId}/cancel — abandon an unpaid checkout so the customer can choose again */
+  cancel: async (orderId: string | number): Promise<ApiResult> => {
+    const res = await authFetch(`${PUBLIC_API_BASE}/orders/${orderId}/cancel`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({}),
@@ -338,10 +362,30 @@ export const OrderApi = {
   },
   /** POST /orders */
   create: async (payload: unknown): Promise<ApiResult> => {
+    try {
+      await waitForReferralChange();
+    } catch {
+      return {
+        ok: false,
+        status: 422,
+        body: {
+          message:
+            'The partner code was not applied. Check it before continuing to payment.',
+        },
+      };
+    }
+    // Re-check the stored referral cookie immediately before creating an order.
+    const referralResponse = await fetch('/api/referral', { cache: 'no-store' });
+    if (!referralResponse.ok) return toApiResult(referralResponse);
+    const referralData = await referralResponse.json();
+    const attributedPayload = {
+      ...(payload && typeof payload === 'object' ? payload : {}),
+      referral_code: referralData.referral?.code ?? null,
+    };
     const res = await authFetch(`${PUBLIC_API_BASE}/orders`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
+      body: JSON.stringify(attributedPayload),
     });
     return toApiResult(res);
   },
