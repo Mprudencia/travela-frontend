@@ -37,10 +37,7 @@ function triggerBlobDownload(blob: Blob, filename: string) {
   window.setTimeout(() => URL.revokeObjectURL(url), 2_000);
 }
 
-/**
- * Builds a Travela receipt PDF and downloads it (or opens the native share sheet
- * on mobile when file sharing is available — avoids the print dialog).
- */
+/** Builds a Travela receipt PDF and downloads it directly through the browser. */
 export async function downloadReceiptPdf(input: ReceiptPdfInput): Promise<void> {
   const { jsPDF } = await import('jspdf');
   const doc = new jsPDF({ unit: 'pt', format: 'a4' });
@@ -174,27 +171,6 @@ export async function downloadReceiptPdf(input: ReceiptPdfInput): Promise<void> 
   const safeRef = input.orderRef.replace(/[^\w.-]+/g, '_').slice(0, 48) || 'order';
   const filename = `travela-receipt-${safeRef}.pdf`;
   const blob = doc.output('blob');
-
-  // Prefer native share on phones so the user can Save to Files / Drive without printing
-  const file = new File([blob], filename, { type: 'application/pdf' });
-  const canShareFile =
-    typeof navigator !== 'undefined' &&
-    typeof navigator.canShare === 'function' &&
-    navigator.canShare({ files: [file] });
-
-  if (canShareFile) {
-    try {
-      await navigator.share({
-        files: [file],
-        title: 'Travela Receipt',
-        text: `Receipt ${input.orderRef}`,
-      });
-      return;
-    } catch (err) {
-      // User cancelled share — fall through to direct download
-      if (err instanceof DOMException && err.name === 'AbortError') return;
-    }
-  }
 
   triggerBlobDownload(blob, filename);
 }

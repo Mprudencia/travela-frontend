@@ -146,7 +146,7 @@ export default function AssignSimPrompt({
             >
               {saving ? (
                 <span className="inline-flex items-center justify-center gap-2">
-                  <Loader2 size={16} className="animate-spin" /> Saving…
+                  <Loader2 size={16} className="animate-spin" /> {hasDateChange ? 'Saving…' : 'Setting up…'}
                 </span>
               ) : hasDateChange ? (
                 'Save date'

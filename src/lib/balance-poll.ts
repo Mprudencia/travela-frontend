@@ -2,10 +2,13 @@ const AWAIT_SINCE_KEY = 'travela_await_balance_since';
 const AWAIT_MSISDN_KEY = 'travela_await_balance_msisdn';
 const OPTIMISTIC_DATA_MB_KEY = 'travela_optimistic_data_mb';
 
+const RECEIPT_PROMPT_KEY = 'travela:showReceiptPrompt';
+const RECEIPT_ORDER_KEY = 'travela:receiptOrderId';
+const CHECKOUT_TRANSITION_KEY = 'travela:checkout-transition';
+
 export type BalancePollContext = {
   since: string;
   msisdn?: string;
-  optimisticDataMb: number;
 };
 
 function readStored(key: string): string | null {
@@ -25,29 +28,11 @@ function removeStored(key: string) {
   localStorage.removeItem(key);
 }
 
-export function getOptimisticDataMb(): number | null {
-  const raw = readStored(OPTIMISTIC_DATA_MB_KEY);
-  if (raw == null || raw === '') return null;
-  const n = Number(raw);
-  return Number.isFinite(n) && n >= 0 ? n : null;
-}
-
-/** Start or extend optimistic balance polling after checkout or a top-up. */
-export function startBalancePoll(opts: {
-  msisdn?: string;
-  purchasedDataMb: number;
-  currentDataMb?: number | null;
-}) {
+/** Ask the dashboard to poll this user's backend balance after checkout. */
+export function startBalancePoll(opts: { msisdn?: string }) {
   if (typeof window === 'undefined') return;
 
-  const purchased = Math.max(0, opts.purchasedDataMb);
-  const baseline =
-    getOptimisticDataMb() ??
-    (opts.currentDataMb != null && Number.isFinite(opts.currentDataMb)
-      ? Math.max(0, opts.currentDataMb)
-      : 0);
-
-  writeStored(OPTIMISTIC_DATA_MB_KEY, String(baseline + purchased));
+  removeStored(OPTIMISTIC_DATA_MB_KEY);
   writeStored(AWAIT_SINCE_KEY, new Date().toISOString());
 
   if (opts.msisdn) {
@@ -61,13 +46,10 @@ export function getBalancePollContext(): BalancePollContext | null {
   if (typeof window === 'undefined') return null;
 
   const since = readStored(AWAIT_SINCE_KEY);
-  const optimistic = getOptimisticDataMb();
-  if (!since || optimistic == null) return null;
+  if (!since) return null;
 
   const msisdn = readStored(AWAIT_MSISDN_KEY);
-  return msisdn
-    ? { since, msisdn, optimisticDataMb: optimistic }
-    : { since, optimisticDataMb: optimistic };
+  return msisdn ? { since, msisdn } : { since };
 }
 
 export function clearBalancePoll() {
@@ -77,31 +59,31 @@ export function clearBalancePoll() {
   removeStored(OPTIMISTIC_DATA_MB_KEY);
 }
 
+/** Drop purchase and balance leftovers. Does not touch the auth token. */
+export function clearStoredPurchaseData() {
+  if (typeof window === 'undefined') return;
+  clearBalancePoll();
+  localStorage.removeItem('lastPurchase');
+  localStorage.removeItem('pendingPayment');
+  localStorage.removeItem('cart');
+  sessionStorage.removeItem(RECEIPT_PROMPT_KEY);
+  sessionStorage.removeItem(RECEIPT_ORDER_KEY);
+  sessionStorage.removeItem(CHECKOUT_TRANSITION_KEY);
+}
+
 export function initBalancePollFromUrl() {
   if (typeof window === 'undefined') return;
 
   const params = new URLSearchParams(window.location.search);
-  const purchased = Number(params.get('purchased_mb') ?? '0');
-  const hasPurchaseHint =
-    params.get('await_balance') === '1' || (Number.isFinite(purchased) && purchased > 0);
+  const hasPurchaseHint = params.get('await_balance') === '1' || params.has('purchased_mb');
   if (!hasPurchaseHint) return;
 
-  const existing = getBalancePollContext();
-  const purchasedMb = Number.isFinite(purchased) ? purchased : 0;
-
-  if (!existing) {
-    startBalancePoll({
-      msisdn: params.get('msisdn') || undefined,
-      purchasedDataMb: purchasedMb,
-    });
+  const urlMsisdn = params.get('msisdn') || undefined;
+  if (!getBalancePollContext()) {
+    startBalancePoll({ msisdn: urlMsisdn });
     return;
   }
 
-  if (purchasedMb > 0 && existing.optimisticDataMb < purchasedMb) {
-    writeStored(OPTIMISTIC_DATA_MB_KEY, String(purchasedMb));
-  }
-
-  const urlMsisdn = params.get('msisdn');
   if (urlMsisdn) {
     writeStored(AWAIT_MSISDN_KEY, urlMsisdn);
   }

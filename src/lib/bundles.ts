@@ -1,3 +1,5 @@
+import { PLAN_VALIDITY_DAYS } from './plan-validity';
+
 export interface Bundle {
   id: string | number;
   sim_bundle_id?: number | null;
@@ -93,10 +95,10 @@ export function mapApiBundles(apiBundles: ApiBundle[]): Bundle[] {
       sim_bundle_id: b.sim_bundle_id ?? null,
       name: displayBundleName(b.alias?.trim() || fallbackBundleName(dataMb) || b.name),
       data_mb: dataMb,
-      validity_days: b.validity_days ?? undefined,
+      validity_days: PLAN_VALIDITY_DAYS,
       price: b.price ?? undefined,
       currency: b.currency ?? undefined,
-      tagline: buildBundleTagline(b.validity_days, dataMb),
+      tagline: buildBundleTagline(PLAN_VALIDITY_DAYS, dataMb),
     };
   });
 }

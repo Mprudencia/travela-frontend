@@ -334,8 +334,7 @@ function ReceiptModal({ order, onClose }: { order: OrderRecord; onClose: () => v
           {downloading ? 'Preparing PDF…' : 'Download PDF'}
         </button>
         <p className="mt-2 text-[11px] text-slate-400 text-center leading-relaxed">
-          Saves a PDF to your device. On phones, you may get a share sheet — choose Save to Files
-          or your preferred app.
+          Downloads the receipt as a PDF to your device.
         </p>
       </div>
     </div>

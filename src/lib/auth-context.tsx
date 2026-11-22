@@ -7,6 +7,7 @@ import {
   extractUserFromAuthBody,
   apiErrorMessage,
 } from '@/lib/api';
+import { clearStoredPurchaseData } from '@/lib/balance-poll';
 import React, {
   createContext,
   useCallback,
@@ -57,10 +58,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [isLoading, setIsLoading] = useState(true);
 
   const clearSession = useCallback(() => {
+    clearStoredPurchaseData();
     localStorage.removeItem('token');
     localStorage.removeItem('user');
-    localStorage.removeItem('lastPurchase');
-    localStorage.removeItem('pendingPayment');
     setToken(null);
     setUser(null);
     window.dispatchEvent(new Event(AUTH_STORAGE_SYNC));
@@ -183,6 +183,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         role: apiUser?.role ?? 'user',
       };
 
+      clearStoredPurchaseData();
       persistSession(authToken, authUser);
     },
     [persistSession]
@@ -191,6 +192,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const register = useCallback(async (data: Record<string, unknown>) => {
     await delay();
     // Simulate successful registration — replace with real API when backend is ready
+    clearStoredPurchaseData();
     const mockToken = `mock_token_${Date.now()}`;
     const mockUser: User = {
       id: 1,

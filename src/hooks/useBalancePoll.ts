@@ -115,11 +115,8 @@ export function useBalancePoll(options?: { onBalanceReady?: () => void }) {
     };
   }, [pollEnabled, pollOnce]);
 
-  const optimisticDataMb = context?.optimisticDataMb ?? null;
-
   return {
     isPolling,
-    optimisticDataMb,
     confirmedDataMb,
   };
 }

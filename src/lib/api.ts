@@ -327,6 +327,15 @@ export const OrderApi = {
     const res = await authFetch(`${PUBLIC_API_BASE}/me/orders`);
     return toApiResult(res);
   },
+  /** POST /orders/{orderId}/evpay-checkout-url — reuse or create the EvMak checkout link */
+  evpayCheckoutUrl: async (orderId: string | number): Promise<ApiResult> => {
+    const res = await authFetch(`${PUBLIC_API_BASE}/orders/${orderId}/evpay-checkout-url`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    return toApiResult(res);
+  },
   /** POST /orders */
   create: async (payload: unknown): Promise<ApiResult> => {
     const res = await authFetch(`${PUBLIC_API_BASE}/orders`, {

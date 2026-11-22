@@ -18,8 +18,9 @@ import {
 } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useEffect, useState } from 'react';
+import { useEffect, useLayoutEffect, useState } from 'react';
 import NationalitySelect from '@/components/checkout/NationalitySelect';
+import { PLAN_VALIDITY_DAYS, plannedExpiryDate, activationToday } from '@/lib/plan-validity';
 import LegalAcceptance from '@/components/legal/LegalAcceptance';
 import { AuthApi, BundlesApi, extractAuthTokenFromBody, OrderApi } from '@/lib/api';
 import { type Bundle, type BundlesResponse, mapApiBundles } from '@/lib/bundles';
@@ -29,7 +30,7 @@ import {
   normalizePaymentUrl,
   resolvePaymentTargetUrl,
 } from '@/lib/payment';
-import { startBalancePoll } from '@/lib/balance-poll';
+import { clearBalancePoll, startBalancePoll } from '@/lib/balance-poll';
 
 interface CartBundle {
   id: string | number;
@@ -119,20 +120,8 @@ function checkoutPageTransitionClass(revealed: boolean) {
   }`;
 }
 
-function tripInclusiveDays(arrivalIso: string, departureIso: string) {
-  const a = new Date(arrivalIso + 'T12:00:00');
-  const b = new Date(departureIso + 'T12:00:00');
-  return Math.round((b.getTime() - a.getTime()) / 86400000) + 1;
-}
-
 function todayIso() {
-  return new Date().toISOString().slice(0, 10);
-}
-
-function addDaysToIso(iso: string, days: number): string {
-  const d = new Date(iso + 'T12:00:00');
-  d.setDate(d.getDate() + days);
-  return d.toISOString().slice(0, 10);
+  return activationToday();
 }
 
 /** Default eSIM activation date (today) and expiry (activation + 30 days) for the order API. */
@@ -140,7 +129,7 @@ function defaultActivationDates() {
   const activation = todayIso();
   return {
     tripArrivalDate: activation,
-    tripDepartureDate: addDaysToIso(activation, 30),
+    tripDepartureDate: plannedExpiryDate(activation),
   };
 }
 
@@ -285,7 +274,7 @@ export default function CheckoutPage() {
           ...parsed,
           simType: 'esim',
           tripArrivalDate: parsed.tripArrivalDate ?? defaults.tripArrivalDate,
-          tripDepartureDate: parsed.tripDepartureDate ?? defaults.tripDepartureDate,
+          tripDepartureDate: plannedExpiryDate(parsed.tripArrivalDate ?? defaults.tripArrivalDate),
         };
         setCart(withActivationDates);
         localStorage.setItem('cart', JSON.stringify(withActivationDates));
@@ -349,6 +338,51 @@ export default function CheckoutPage() {
     }
   }, [step, isTopUpFlow, router]);
 
+  const cartReady = cart !== null;
+
+  // Keep the document from restoring or anchoring a previous scroll offset
+  // while any checkout step is on screen.
+  useLayoutEffect(() => {
+    const previousRestoration = history.scrollRestoration;
+    history.scrollRestoration = 'manual';
+    const root = document.documentElement;
+    const previousAnchor = root.style.overflowAnchor;
+    root.style.overflowAnchor = 'none';
+    return () => {
+      history.scrollRestoration = previousRestoration;
+      root.style.overflowAnchor = previousAnchor;
+    };
+  }, []);
+
+  // Every step starts at the top, including when the previous step was
+  // scrolled to the bottom. Follow-up pins beat scroll anchoring after paint.
+  useLayoutEffect(() => {
+    const pinToTop = () => {
+      const active = document.activeElement;
+      if (active instanceof HTMLElement && active !== document.body) active.blur();
+      const root = document.documentElement;
+      const previous = root.style.scrollBehavior;
+      root.style.scrollBehavior = 'auto';
+      window.scrollTo(0, 0);
+      root.scrollTop = 0;
+      document.body.scrollTop = 0;
+      root.style.scrollBehavior = previous;
+    };
+
+    pinToTop();
+    let innerFrame = 0;
+    const frame = requestAnimationFrame(() => {
+      innerFrame = requestAnimationFrame(pinToTop);
+    });
+    const timers = [50, 150, 400].map((ms) => window.setTimeout(pinToTop, ms));
+
+    return () => {
+      cancelAnimationFrame(frame);
+      cancelAnimationFrame(innerFrame);
+      for (const id of timers) window.clearTimeout(id);
+    };
+  }, [step, cartReady]);
+
   useEffect(() => {
     if (step !== 'otp') return;
     const tick = () => {
@@ -371,14 +405,11 @@ export default function CheckoutPage() {
     );
   }
 
-  // Always derive price from the live-verified bundle; fall back to cart only
-  // while the async verification is still in-flight.
-  const liveBundle = verifiedBundle ?? cart.bundle;
-  const total = Number(liveBundle.price ?? 0);
-  const currency = liveBundle.currency ?? 'USD';
-  const validityDays = cart.bundle.validity_days ?? 30;
+  const total = Number(cart.bundle.price ?? 0);
+  const currency = cart.bundle.currency ?? 'USD';
+  const validityDays = PLAN_VALIDITY_DAYS;
   const expiryDate =
-    cart.tripDepartureDate ?? addDaysToIso(cart.tripArrivalDate ?? todayIso(), validityDays);
+    plannedExpiryDate(cart.tripArrivalDate ?? todayIso());
 
   const formatDisplayDate = (iso: string) =>
     new Date(iso + 'T12:00:00').toLocaleDateString(undefined, {
@@ -396,7 +427,7 @@ export default function CheckoutPage() {
       const updated: Cart = {
         ...prev,
         tripArrivalDate: newDateIso,
-        tripDepartureDate: addDaysToIso(newDateIso, 30),
+        tripDepartureDate: plannedExpiryDate(newDateIso),
       };
       localStorage.setItem('cart', JSON.stringify(updated));
       return updated;
@@ -504,6 +535,10 @@ export default function CheckoutPage() {
         setRegisterError(apiErrorMessage(result.body, `Registration failed (HTTP ${result.status}).`));
         return;
       }
+
+      clearBalancePoll();
+      localStorage.removeItem('lastPurchase');
+      localStorage.removeItem('pendingPayment');
 
       const token = extractAuthTokenFromBody(result.body);
       if (token) localStorage.setItem('token', token);
@@ -706,7 +741,7 @@ export default function CheckoutPage() {
         departureDate: cart.tripDepartureDate,
         duration:
           cart.tripArrivalDate && cart.tripDepartureDate
-            ? tripInclusiveDays(cart.tripArrivalDate, cart.tripDepartureDate)
+            ? PLAN_VALIDITY_DAYS
             : undefined,
       },
       simType: cart.simType,
@@ -758,11 +793,11 @@ export default function CheckoutPage() {
   };
 
   const buildOrderPayload = (userId: number) => {
-    const { tripArrivalDate: fallbackArrival, tripDepartureDate: fallbackDeparture } =
+    const { tripArrivalDate: fallbackArrival } =
       defaultActivationDates();
     const arrival = cart.tripArrivalDate ?? fallbackArrival;
-    const departure = cart.tripDepartureDate ?? fallbackDeparture;
-    const duration = tripInclusiveDays(arrival, departure);
+    const departure = plannedExpiryDate(arrival);
+    const duration = PLAN_VALIDITY_DAYS;
 
     const topUp = cart.checkoutMode === 'topup' || isTopUpFlow;
 
@@ -786,14 +821,13 @@ export default function CheckoutPage() {
       items: [
         {
           type: 'bundle',
-          // Use verifiedBundle (live API) so tampered localStorage values are ignored
-          bundle_id: Number((verifiedBundle ?? cart.bundle).id),
-          sim_bundle_id: (verifiedBundle ?? cart.bundle).sim_bundle_id ?? null,
-          bundle_name: (verifiedBundle ?? cart.bundle).name,
-          data_amount: (verifiedBundle ?? cart.bundle).data_mb ?? null,
-          validity_days: (verifiedBundle ?? cart.bundle).validity_days ?? 30,
-          price: Number((verifiedBundle ?? cart.bundle).price ?? 0),
-          currency: ((verifiedBundle ?? cart.bundle).currency ?? currency) as string,
+          bundle_id: Number(cart.bundle.id),
+          sim_bundle_id: cart.bundle.sim_bundle_id ?? null,
+          bundle_name: cart.bundle.name,
+          data_amount: cart.bundle.data_mb ?? null,
+          validity_days: PLAN_VALIDITY_DAYS,
+          price: Number(cart.bundle.price ?? 0),
+          currency: (cart.bundle.currency ?? currency) as string,
         },
       ],
       pricing: {
@@ -868,16 +902,10 @@ export default function CheckoutPage() {
         draftId,
       });
 
-      savePendingPayment({ orderId, draftId, paymentUrl });
+      savePendingPayment({ orderId, draftId, paymentUrl: targetUrl });
 
-      // Only optimistic-poll after top-up (existing SIM). New purchases wait until payment is confirmed.
-      if (cart && isTopUpFlow) {
-        const purchasedDataMb = Number(cart.bundle.data_mb) || 0;
-        startBalancePoll({
-          msisdn: cart.msisdn,
-          purchasedDataMb,
-          currentDataMb: cart.current_data_mb,
-        });
+      if (cart && (isTopUpFlow || cart.simType === 'esim')) {
+        startBalancePoll({ msisdn: cart.msisdn });
       }
 
       openPaymentInNewTab(targetUrl, paymentTab);
@@ -1101,7 +1129,7 @@ export default function CheckoutPage() {
                   <p className="text-sm font-black text-slate-900">{cart.bundle.name}</p>
                   <p className="text-sm font-bold text-slate-800">{formatMb(cart.bundle.data_mb)}</p>
                   <p className="text-xs text-slate-500">
-                    {cart.bundle.validity_days ?? 30} days ·{' '}
+                    {PLAN_VALIDITY_DAYS} days ·{' '}
                     {cart.simType === 'esim' ? 'eSIM' : 'Physical SIM'}
                   </p>
                 </div>
