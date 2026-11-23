@@ -15,6 +15,7 @@ import { useAuth } from '@/lib/auth-context';
 import { getBalancePollContext } from '@/lib/balance-poll';
 import {
   PLAN_VALIDITY_DAYS,
+  NUMBER_GRACE_DAYS,
   plannedExpiryDate,
   hasNumberExpired,
   numberExpiryDate,
@@ -1210,7 +1211,10 @@ export default function DashboardPage() {
       const dismissed = new Set(readDismissedUnpaidOrderIds());
       const unpaidOrder = findLatestUnpaidOrder(orders, dismissed);
       const topUpOrder = unpaidOrder?.metadata?.checkoutMode === 'topup';
-      const numberExpired = hasNumberExpired(userEsims[0]?.plan_started_at);
+      const numberExpired = hasNumberExpired(
+        userEsims[0]?.plan_expires_at,
+        userEsims[0]?.plan_started_at
+      );
       await abandonCurrentPayment();
       router.push(topUpOrder && !numberExpired ? TOPUP_BUNDLES_HREF : NEW_ESIM_HREF);
     } catch (e: unknown) {
@@ -1305,7 +1309,7 @@ export default function DashboardPage() {
         return;
       }
 
-      if (hasNumberExpired(activeEsim.plan_started_at)) {
+      if (hasNumberExpired(activeEsim.plan_expires_at, activeEsim.plan_started_at)) {
         closeTopUpModal(() => router.push(NEW_ESIM_HREF));
         return;
       }
@@ -1791,23 +1795,22 @@ export default function DashboardPage() {
     latestPaidOrder?.trip?.arrival_date ?? purchase?.trip?.arrivalDate ?? null;
   const planStartIso = primaryUserEsim?.plan_started_at ?? null;
   const confirmedExpiryIso = primaryUserEsim?.plan_expires_at ?? null;
-  /** Number is valid for 30 days from activation; top-ups are allowed only inside that window. */
-  const numberExpiresIso = numberExpiryDate(planStartIso);
+  /**
+   * Data plan lasts 30 days (plan_expires_at). The number stays open for top-ups for
+   * 90 days after that plan ends — top up in time to keep the same number.
+   */
+  const numberExpiresIso = numberExpiryDate(confirmedExpiryIso, planStartIso);
   const deactivationIso =
-    numberExpiresIso ??
     confirmedExpiryIso ??
     (scheduledActivationIso ? plannedExpiryDate(scheduledActivationIso.slice(0, 10)) : null);
-  const daysRemaining = numberExpiresIso
-    ? daysUntil(numberExpiresIso)
-    : confirmedExpiryIso
-      ? daysUntil(confirmedExpiryIso)
-      : null;
+  const daysRemaining = confirmedExpiryIso ? daysUntil(confirmedExpiryIso) : null;
   const daysRemainingLabel = daysLeftLabel(daysRemaining);
+  const numberGraceDaysRemaining = numberExpiresIso ? daysUntil(numberExpiresIso) : null;
 
   const todayPart = activationToday();
   const activationDay = toDatePart(scheduledActivationIso);
-  /** Number window ended (30 days after activation) — top-up is closed; buy a new eSIM. */
-  const isNumberExpired = hasNumberExpired(planStartIso);
+  /** Number window ended (90 days after last plan end with no top-up) — buy a new eSIM. */
+  const isNumberExpired = hasNumberExpired(confirmedExpiryIso, planStartIso);
   /**
    * Purchased with a future activation date — number/activation details stay hidden
    * until that day; only purchase confirmation + receipt for now.
@@ -2488,8 +2491,8 @@ export default function DashboardPage() {
                     </p>
                     <p className="text-xs text-slate-500 mt-1">
                       Expired
-                      {formatTripDate(deactivationIso)
-                        ? ` ${formatTripDate(deactivationIso)}`
+                      {formatTripDate(numberExpiresIso ?? deactivationIso)
+                        ? ` ${formatTripDate(numberExpiresIso ?? deactivationIso)}`
                         : ''}
                       . Finish your new eSIM payment above to get a new number.
                     </p>
@@ -2529,11 +2532,12 @@ export default function DashboardPage() {
                           )}
                           <p className="text-base font-black text-white/80 mt-1">{esimTitle}</p>
                           <p className="text-sm font-semibold mt-2 text-white/55">
-                            This number’s 30-day window from activation has ended.
+                            No top-up for {NUMBER_GRACE_DAYS} days after the last plan ended, so this
+                            number has expired.
                           </p>
-                          {formatTripDate(deactivationIso) && (
+                          {formatTripDate(numberExpiresIso ?? deactivationIso) && (
                             <p className="text-xs font-semibold mt-2 text-white/45">
-                              Ended {formatTripDate(deactivationIso)}
+                              Ended {formatTripDate(numberExpiresIso ?? deactivationIso)}
                             </p>
                           )}
                         </div>
@@ -2551,7 +2555,9 @@ export default function DashboardPage() {
                     <div>
                       <p className="text-sm font-extrabold text-slate-900">This number has expired</p>
                       <p className="text-sm text-slate-500 mt-1">
-                        After 30 days from activation, this number can’t be topped up. Buy a new eSIM to get a new number and a new plan.
+                        Data plans last {PLAN_VALIDITY_DAYS} days. After a plan ends, you have{' '}
+                        {NUMBER_GRACE_DAYS} days to top up the same number. That window has passed —
+                        buy a new eSIM for a new number and plan.
                       </p>
                     </div>
                     <div className="flex flex-col sm:flex-row gap-2">
@@ -2576,6 +2582,41 @@ export default function DashboardPage() {
               )
             ) : (
               <>
+            {daysRemaining != null &&
+              daysRemaining < 0 &&
+              numberGraceDaysRemaining != null &&
+              numberGraceDaysRemaining >= 0 && (
+                <div className="rounded-2xl border border-amber-200 bg-amber-50 px-5 py-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-sm font-extrabold text-slate-900">Your data plan has ended</p>
+                    <p className="text-sm text-slate-600 mt-1 leading-relaxed">
+                      Top up within{' '}
+                      {numberGraceDaysRemaining === 0
+                        ? 'today'
+                        : numberGraceDaysRemaining === 1
+                          ? '1 day'
+                          : `${numberGraceDaysRemaining} days`}{' '}
+                      to keep{' '}
+                      {assignedMsisdn ? (
+                        <span className="font-semibold text-slate-800">
+                          {formatMsisdn(assignedMsisdn)}
+                        </span>
+                      ) : (
+                        'this number'
+                      )}
+                      . After that, you’ll need a new eSIM.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setTopUpModalOpen(true)}
+                    className="inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl text-sm font-bold text-white hover:opacity-90 flex-shrink-0"
+                    style={{ backgroundColor: '#112116' }}
+                  >
+                    Top Up
+                  </button>
+                </div>
+              )}
             {/* Activation instructions — shown first so users know what the buttons below do */}
             {isEsimType && hasActiveEsim && planStartIso && !primaryUserEsim?.device_activated_at && (
               <div className="bg-white rounded-2xl border border-dashed border-slate-300 p-6">

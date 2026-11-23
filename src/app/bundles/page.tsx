@@ -14,7 +14,7 @@ import {
   mapApiBundles,
 } from '@/lib/bundles';
 import { dataMbFromAssignment } from '@/lib/esim-balance';
-import { hasNumberExpired } from '@/lib/plan-validity';
+import { hasNumberExpired, NUMBER_GRACE_DAYS, PLAN_VALIDITY_DAYS } from '@/lib/plan-validity';
 
 type CheckoutMode = 'standard' | 'topup';
 
@@ -110,10 +110,17 @@ function BundlesContent() {
         if (!res.ok || cancelled) return;
         const body = res.body as { data?: unknown[] } | unknown[];
         const rows = Array.isArray(body) ? body : Array.isArray(body?.data) ? body.data : [];
-        const first = rows[0] as { plan_started_at?: string | null } | undefined;
-        if (!cancelled && first && hasNumberExpired(first.plan_started_at)) {
+        const first = rows[0] as {
+          plan_expires_at?: string | null;
+          plan_started_at?: string | null;
+        } | undefined;
+        if (
+          !cancelled &&
+          first &&
+          hasNumberExpired(first.plan_expires_at, first.plan_started_at)
+        ) {
           setExpiredNumberMessage(
-            'This number’s 30-day window from activation has ended, so it can’t be topped up. Choose a plan below to buy a new eSIM and a new number.'
+            `No top-up for ${NUMBER_GRACE_DAYS} days after the last ${PLAN_VALIDITY_DAYS}-day plan ended, so this number can’t be topped up. Choose a plan below to buy a new eSIM and a new number.`
           );
         }
       } catch {
@@ -180,16 +187,17 @@ function BundlesContent() {
               : [];
         const first = rows[0] as {
           id?: number;
+          plan_expires_at?: string | null;
           plan_started_at?: string | null;
           balances?: Record<string, unknown> | null;
           bundle?: { data_mb?: number | null };
           order_item?: { data_amount?: number | null };
           esim?: { msisdn?: string | null; phone_number?: string | null };
         } | undefined;
-        if (hasNumberExpired(first?.plan_started_at)) {
+        if (hasNumberExpired(first?.plan_expires_at, first?.plan_started_at)) {
           checkoutMode = 'standard';
           setExpiredNumberMessage(
-            'This number’s 30-day window from activation has ended, so it can’t be topped up. Choose a plan below to buy a new eSIM and a new number.'
+            `No top-up for ${NUMBER_GRACE_DAYS} days after the last ${PLAN_VALIDITY_DAYS}-day plan ended, so this number can’t be topped up. Choose a plan below to buy a new eSIM and a new number.`
           );
         } else {
           user_esim_id = first?.id;
